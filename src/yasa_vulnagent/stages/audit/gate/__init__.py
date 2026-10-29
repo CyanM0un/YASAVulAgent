@@ -1,0 +1,1 @@
+"""Audit gate node."""

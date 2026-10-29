@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yasa-vulnagent"
+version = "0.1.0"
+description = "Evidence-backed vulnerability analysis, validation, and local report generation for repository code"
+requires-python = ">=3.10"
+dependencies = [
+  "langgraph>=1.2,<2",
+  "fastmcp>=2.11.3",
+  "orjson>=3.11.3",
+  "pydantic>=2.11.7",
+  "duckdb>=1.5.0",
+  "pyarrow>=14.0.0",
+  "anyio>=4.0",
+  "ast-grep-py>=0.36.3",
+  "requests>=2.32.0",
+  "langchain-openai>=1.0,<2",
+  "pypdf>=6,<7",
+  "python-docx>=1.2,<2",
+  "tiktoken>=0.7",
+  "cvss>=3.6,<4",
+]
+
+[project.scripts]
+yasa-vulnagent = "yasa_vulnagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"yasa_vulnagent.stages.init.documents" = ["SKILL.md", "prompts/*.md"]
+"yasa_vulnagent.stages.init.security_history" = ["SKILL.md", "prompts/*.md"]
+"yasa_vulnagent.stages.discover.screen" = ["SKILL.md", "prompts/*.md"]
+"yasa_vulnagent.stages.discover.review" = ["prompts/*.md"]
+"yasa_vulnagent.stages.discover.confirm" = ["prompt.md"]
+"yasa_vulnagent.stages.audit" = ["categories.json", "category_details.json"]
+"yasa_vulnagent.stages.audit.plan" = ["prompt.md"]
+"yasa_vulnagent.stages.audit.trace" = ["*.md", "specialists/*.json", "specialists/*.md"]
+"yasa_vulnagent.stages.audit.recon" = ["prompt.md"]
+"yasa_vulnagent.stages.audit.verify" = ["*.md"]
+"yasa_vulnagent.stages.validate" = ["README.md", "prompts/*.md"]
+"yasa_vulnagent.stages.validate.environment" = ["README.md", "prompts/*.md"]
+"yasa_vulnagent.stages.report" = ["README.md", "prompts/*.md"]

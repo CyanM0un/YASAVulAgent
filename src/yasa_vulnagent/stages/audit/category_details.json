@@ -1,0 +1,157 @@
+{
+  "profile_version": 1,
+  "categories": {
+    "identity_authentication_authorization": {
+      "cwe_ids": [284, 285, 287, 288, 289, 290, 291, 293, 294, 306, 352, 384, 522, 613, 639, 798, 862, 863, 1392],
+      "checks": [
+        "Identify the caller identity for each entry and whether anonymous, low-privilege, tenant, and admin callers can reach the same operation.",
+        "Verify server-side authentication and default-deny behavior for every protected action; do not trust frontend checks or gateway-only checks.",
+        "Check object-level authorization for user-controlled IDs, parent IDs, tenant IDs, and owner fields, including read, update, delete, export, and batch variants.",
+        "Check horizontal and vertical authorization across sibling operations, internal endpoints, admin endpoints, bulk endpoints, and async workers.",
+        "Check authentication bypasses through alternate paths, case or encoding differences, duplicate parameters, trusted proxy headers, IP or Referer trust, and capture-replay.",
+        "Check session lifecycle: fixation, rotation, expiration, logout, remember-me, concurrent sessions, cookie scope, and SameSite behavior.",
+        "Check CSRF protection for state-changing requests, including JSON endpoints and requests that rely on ambient credentials.",
+        "Check JWT, OAuth, API-key, and signature validation: algorithm, key selection, signature, issuer, audience, expiry, state, redirect URI, and claim trust.",
+        "Check password recovery, MFA, invitation, registration, and account-linking flows for authentication bypass or account takeover.",
+        "Check default, shared, hard-coded, or example credentials and whether they are reachable in production.",
+        "Check whether the identity used by a security decision is the same identity used by the protected sink, including time-of-check/time-of-use changes."
+      ]
+    },
+    "injection_interpretation": {
+      "cwe_ids": [20, 74, 77, 78, 79, 88, 89, 90, 91, 93, 94, 113, 117, 235, 643, 652, 917, 943, 1236, 1321, 1336],
+      "checks": [
+        "Trace attacker-controlled values into SQL, HQL, JPQL, stored procedures, dynamic ORDER BY or LIMIT clauses, LIKE expressions, IN lists, and raw ORM fragments (CWE-89).",
+        "Check NoSQL and document-query operators, including MongoDB operators such as $ne, $gt, and $where, and GraphQL variables, directives, and resolver query construction (CWE-943).",
+        "Check ORM and query-builder misuse: raw fragments, dynamic table or column names, JSON paths, and query objects built from user-controlled maps.",
+        "Check OS command and shell injection through sh -c, pipes, redirection, command concatenation, environment variables, and user-controlled filenames or arguments (CWE-77/78).",
+        "Check argument injection even without a shell, including leading dashes, option order, URL schemes, and arguments that change a helper's behavior (CWE-88).",
+        "Check code and expression injection through eval, reflection, dynamic import, scripting engines, SpEL, OGNL, EL, and JNDI boundaries (CWE-94/917).",
+        "Check server-side template injection, user-controlled template names or fragments, expression evaluation in templates, and frontend/backend template boundary confusion (CWE-1336).",
+        "Check LDAP filter and DN construction, XPath and XQuery predicates, and XML construction or XSLT boundaries (CWE-90/643/652/91).",
+        "Check reflected, stored, and DOM cross-site scripting (XSS) across HTML, attribute, URL, JavaScript, CSS, and rich-text contexts, including cases where framework escaping is bypassed (CWE-79).",
+        "Check response header and CRLF injection through Location, Set-Cookie, and other headers, and log forging or structured-log field injection (CWE-113/93/117).",
+        "Check CSV and spreadsheet formula injection for exported values beginning with =, +, -, or @ (CWE-1236).",
+        "Check prototype pollution through object merges, __proto__, constructor.prototype, and deep-copy or deep-merge helpers (CWE-1321).",
+        "Check HTTP parameter pollution and parser differentials where duplicate parameters, arrays, or scalar conversions are interpreted differently by proxy, framework, and business code (CWE-235).",
+        "Check second-order injection after storage, normalization, decoding, or later re-parsing, and verify the effective grammar and escaping at the final sink."
+      ]
+    },
+    "files_paths_archives_uploads": {
+      "cwe_ids": [22, 23, 36, 41, 59, 61, 62, 64, 65, 66, 67, 69, 73, 98, 377, 409, 434, 538, 552, 610, 646, 668, 706, 732],
+      "checks": [
+        "Check path traversal and absolute path injection, including dot segments, encoded separators, null bytes, Windows separators, UNC paths, alternate data streams, and case differences (CWE-22/23/36).",
+        "Check canonicalization and path equivalence: whether the validated path is the same path used by the sink, including symlink, hardlink, and race behavior (CWE-41/59/61/62/64/65/66/67/69).",
+        "Check file inclusion and dynamic import through user-controlled paths, extensions, or protocols (CWE-98).",
+        "Check download, preview, static serving, and export paths for confinement to the intended root and for cross-tenant or cross-user access.",
+        "Check upload handling: extension, Content-Type, magic bytes, content parsing, dangerous file types, storage location, executability, and overwrite behavior (CWE-434).",
+        "Check archive extraction for zip slip, tar symlinks, path traversal, overwrite, destination escape, and decompression bombs (CWE-22/409).",
+        "Check temporary file creation, permissions, predictable names, atomic writes, cleanup, and umask (CWE-377/732).",
+        "Check file metadata and filename handling when values flow into logs, commands, SQL, templates, or response headers.",
+        "Check create, delete, rename, chmod, and directory creation operations for authorization and path confinement."
+      ]
+    },
+    "network_protocol_boundaries": {
+      "cwe_ids": [93, 113, 295, 319, 326, 327, 346, 350, 352, 444, 601, 644, 918, 942, 1385],
+      "checks": [
+        "Check server-side request forgery through user-controlled URL, host, port, scheme, redirect, Unix socket, or DNS resolution, including IPv4, IPv6, decimal, octal, and IPv4-mapped forms (CWE-918).",
+        "Check that outbound allowlists are applied after DNS resolution and redirect handling, not only to the original string.",
+        "Check open redirects through return, next, callback, and protocol-relative URLs (CWE-601).",
+        "Check CSRF protection for state-changing cross-site requests, including cookie scope, SameSite, token validation, and Origin/Referer checks (CWE-352).",
+        "Check CORS policy for wildcard origins with credentials, reflected origins, and trusted subdomain assumptions (CWE-942).",
+        "Check HTTP request smuggling through Content-Length and Transfer-Encoding disagreement, plus frontend/backend parser differentials (CWE-444).",
+        "Check response splitting and header injection through CRLF in Location, Set-Cookie, and other headers (CWE-113/93).",
+        "Check Host header and forwarding-header trust, including X-Forwarded-* and Forwarded headers (CWE-644).",
+        "Check TLS certificate validation, protocol strength, and cleartext transmission (CWE-295/319/326/327).",
+        "Check WebSocket origin validation, callback and webhook trust, and internal-service reachability (CWE-1385)."
+      ]
+    },
+    "parsing_deserialization_representation": {
+      "cwe_ids": [20, 91, 116, 128, 129, 130, 131, 134, 170, 190, 191, 194, 195, 196, 197, 198, 199, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 400, 409, 502, 611, 643],
+      "checks": [
+        "Check unsafe deserialization across Java, PHP, Python, .NET, pickle, YAML tags, XML decoders, and custom serialization formats (CWE-502).",
+        "Check polymorphic type selection, reflection, object construction, and gadget-chain exposure after deserialization.",
+        "Check XML external entities, DTDs, XInclude, and schema validation boundaries (CWE-611).",
+        "Check JSON, YAML, protobuf, binary, and custom parsers for duplicate keys, type confusion, unknown fields, coercions, and unsafe defaults.",
+        "Check numeric conversions for overflow, truncation, signedness, length calculations, and index or size arithmetic (CWE-190/191/194/195/196/197/198/199).",
+        "Check encoding and Unicode normalization, including UTF-7, UTF-16, surrogates, case folding, and null bytes (CWE-20/116/170).",
+        "Check conversions between strings, paths, identifiers, and structured values that can change meaning before a security decision.",
+        "Check parser differentials where proxy, framework, validation layer, and business parser interpret the same input differently.",
+        "Check whether deserialized objects bypass validation or invoke constructors, magic methods, or callbacks with security impact."
+      ]
+    },
+    "secrets_sensitive_data": {
+      "cwe_ids": [200, 201, 203, 209, 215, 256, 257, 259, 260, 261, 262, 263, 264, 265, 312, 313, 314, 315, 316, 319, 326, 327, 328, 330, 338, 522, 532, 538, 798, 1392],
+      "checks": [
+        "Check source, configuration, tests, examples, scripts, CI, containers, and build artifacts for credentials, tokens, private keys, and connection strings (CWE-798/1392).",
+        "Check logs, error pages, stack traces, debug output, metrics, traces, source maps, exports, caches, and backups for sensitive values (CWE-200/201/203/209/215/532/538).",
+        "Check URL query strings, headers, cookies, local storage, and third-party callbacks for sensitive data exposure.",
+        "Check encryption at rest and in transit, password hashing, key derivation, random values, key rotation, and key scope (CWE-312/313/314/315/316/319/326/327/328/330/338).",
+        "Check tenant, user, and role isolation for sensitive records and whether responses apply least privilege and redaction.",
+        "Check data retention, deletion, backup, cache expiry, and CDN cache keys.",
+        "Check default or shared credentials and whether example credentials are reachable in production.",
+        "Do not contact external services or test real credentials; establish exposure from source and configuration only."
+      ]
+    },
+    "state_workflow_business_logic": {
+      "cwe_ids": [294, 362, 364, 366, 367, 639, 840, 841, 842, 843, 844, 862, 863, 915],
+      "checks": [
+        "Check lifecycle transitions for create, submit, approve, cancel, complete, refund, and close; verify the order cannot be skipped, reversed, or replayed (CWE-840/841).",
+        "Check multi-step workflows for step skipping, replay, concurrent execution, duplicate callbacks, and out-of-order messages.",
+        "Check idempotency, retries, timeouts, rollback, and partial failure for inconsistent state.",
+        "Check business invariants for approval, quota, inventory, balance, coupons, and entitlements.",
+        "Check negative, zero, very large, fractional, and unit-conversion values that can bypass business limits.",
+        "Check ownership transfer, sharing, invitations, bulk operations, import, and export.",
+        "Check race conditions and time-of-check/time-of-use gaps; verify lock granularity and transaction boundaries (CWE-362/364/366/367).",
+        "Check mass assignment where user-controlled fields can change role, owner, status, price, or other protected attributes (CWE-915).",
+        "Check object-level authorization and tenant isolation in state-changing operations (CWE-639/862/863).",
+        "State the violated invariant and the capability obtained by the attacker, not just the workflow description."
+      ]
+    },
+    "resource_exhaustion_availability": {
+      "cwe_ids": [400, 404, 405, 406, 407, 409, 410, 674, 770, 776, 834, 835, 1333],
+      "checks": [
+        "Check limits on request bodies, files, fields, arrays, pagination, and nested objects (CWE-400/770).",
+        "Check decompression bombs, XML entity expansion, deeply nested structures, and recursive parsing (CWE-409/674/776).",
+        "Check regular-expression complexity and algorithmic complexity in sorting, deduplication, graph traversal, and query evaluation (CWE-407/1333).",
+        "Check unbounded fan-out, retry amplification, external-call amplification, and queue, thread, or connection-pool exhaustion (CWE-405/406/410).",
+        "Check memory, disk, CPU, file-descriptor, lock, and temporary-file consumption.",
+        "Check timeout, cancellation, backpressure, rate limiting, and quota coverage on slow paths.",
+        "Establish a bounded local effect; do not stress a live service."
+      ]
+    },
+    "configuration_dependency_supply_chain": {
+      "cwe_ids": [2, 5, 15, 16, 250, 453, 489, 494, 506, 507, 732, 829, 830, 912, 1104, 1188, 1357, 1395],
+      "checks": [
+        "Check configuration sources, defaults, environment overrides, precedence, and empty or invalid values (CWE-15/16/1188).",
+        "Check debug and admin features, example settings, default accounts, default keys, and default-disabled security controls (CWE-489/1188).",
+        "Check plugin, extension, dynamic import, classpath, and module-search behavior (CWE-829/830/912).",
+        "Check dependency versions, lock files, unmaintained or vulnerable dependencies, dependency confusion, and typosquatting (CWE-1104/1357/1395).",
+        "Check download, update, build, and release integrity verification (CWE-494/506/507).",
+        "Check CI/CD, container, startup scripts, permissions, and secret injection (CWE-250/732).",
+        "Check whether low-privilege users or external input can change security-relevant configuration.",
+        "Separate source-backed behavior from deployment facts; keep unconfirmed deployment conditions as gaps."
+      ]
+    },
+    "native_binary_unsafe_memory": {
+      "cwe_ids": [119, 120, 121, 122, 125, 129, 131, 134, 170, 190, 191, 194, 195, 196, 197, 198, 199, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 415, 416, 468, 469, 475, 476, 562, 587, 590, 665, 666, 667, 668, 680, 681, 758, 761, 762, 763, 764, 765, 766, 767, 768, 769, 770],
+      "checks": [
+        "Check buffer copies, length calculations, and bounds checks for overflow and out-of-bounds access (CWE-119/120/121/122/125).",
+        "Check integer overflow, truncation, and signed/unsigned conversions that affect allocation or indexing (CWE-190/191/194/195/196/197/198/199).",
+        "Check array indexing, pointer arithmetic, off-by-one errors, and allocation-size multiplication.",
+        "Check null pointers, uninitialized memory, and error paths that leave objects partially initialized (CWE-476).",
+        "Check use-after-free, double free, lifetime, ownership, and error-path cleanup (CWE-415/416).",
+        "Check unsafe casts, FFI, JNI, native bindings, and serialization boundaries.",
+        "Establish a concrete integrity or isolation impact; do not report theoretical memory issues without evidence."
+      ]
+    },
+    "open_exploration": {
+      "cwe_ids": [],
+      "checks": [
+        "After the baseline categories, search for a security-relevant invariant, trust boundary, or business rule that the baseline does not cover.",
+        "Follow the strongest source-backed lead and record a new category or an explicit negative scope.",
+        "Do not treat open exploration as a replacement for required baseline category records.",
+        "Do not record an empty result as proof of security."
+      ]
+    }
+  }
+}

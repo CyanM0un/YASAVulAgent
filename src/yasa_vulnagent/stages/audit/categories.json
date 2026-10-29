@@ -1,0 +1,107 @@
+{
+  "profile_version": 1,
+  "categories": [
+    {
+      "id": "identity_authentication_authorization",
+      "title": "Identity, authentication, and authorization",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "injection_interpretation",
+      "title": "Injection and interpretation",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "files_paths_archives_uploads",
+      "title": "Files, paths, archives, and uploads",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "network_protocol_boundaries",
+      "title": "Network and protocol boundaries",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "parsing_deserialization_representation",
+      "title": "Parsing, deserialization, and representation changes",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "secrets_sensitive_data",
+      "title": "Secrets and sensitive data",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "state_workflow_business_logic",
+      "title": "State, workflow, and business logic",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "resource_exhaustion_availability",
+      "title": "Resource exhaustion and availability",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "configuration_dependency_supply_chain",
+      "title": "Configuration, dependency, and supply-chain trust",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "native_binary_unsafe_memory",
+      "title": "Native, binary, and unsafe memory boundaries",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    },
+    {
+      "id": "open_exploration",
+      "title": "Open exploration",
+      "applies_to": ["entry"],
+      "source": "baseline",
+      "required": true,
+      "version": 1
+    }
+  ],
+  "patch_checks": [
+    {
+      "kind": "original_path",
+      "title": "Original vulnerable path"
+    },
+    {
+      "kind": "bypass",
+      "title": "Bypass"
+    },
+    {
+      "kind": "same_mechanism",
+      "title": "Same mechanism"
+    }
+  ]
+}

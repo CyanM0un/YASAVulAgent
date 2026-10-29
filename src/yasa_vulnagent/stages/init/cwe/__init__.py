@@ -1,0 +1,1 @@
+"""Offline CWE validation node."""

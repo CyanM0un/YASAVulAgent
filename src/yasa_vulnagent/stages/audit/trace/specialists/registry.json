@@ -1,0 +1,61 @@
+{
+  "profile_version": 1,
+  "specialists": [
+    {
+      "id": "identity",
+      "title": "Identity and authorization",
+      "description": "Use for caller identity, tenant isolation, object-level authorization, sessions, and identity mismatches.",
+      "prompt": "identity.md",
+      "tools": "source_yasa",
+      "applies_to": ["entry", "logic"],
+      "mandatory_for": [],
+      "scope": "lens",
+      "categories": [],
+      "max_focus_units": 5,
+      "priority": 10,
+      "enabled": true
+    },
+    {
+      "id": "boundary",
+      "title": "Input and boundary handling",
+      "description": "Use for file, path, upload, archive, network, parsing, deserialization, secret, configuration, and resource boundaries.",
+      "prompt": "boundary.md",
+      "tools": "source_yasa",
+      "applies_to": ["entry", "logic"],
+      "mandatory_for": [],
+      "scope": "lens",
+      "categories": [],
+      "max_focus_units": 5,
+      "priority": 20,
+      "enabled": true
+    },
+    {
+      "id": "dynamic",
+      "title": "Dynamic dispatch and configuration",
+      "description": "Use for reflection, dependency injection, annotations, configuration routing, events, callbacks, and string dispatch.",
+      "prompt": "dynamic.md",
+      "tools": "source_yasa",
+      "applies_to": ["entry", "logic"],
+      "mandatory_for": [],
+      "scope": "lens",
+      "categories": [],
+      "max_focus_units": 5,
+      "priority": 30,
+      "enabled": true
+    },
+    {
+      "id": "patch",
+      "title": "Patch mechanism",
+      "description": "Use for original vulnerable path, bypass, same-mechanism coverage, and repair-unit effectiveness.",
+      "prompt": "patch.md",
+      "tools": "source_yasa_git",
+      "applies_to": ["patch"],
+      "mandatory_for": ["patch"],
+      "scope": "lens",
+      "categories": [],
+      "max_focus_units": 5,
+      "priority": 100,
+      "enabled": true
+    }
+  ]
+}
