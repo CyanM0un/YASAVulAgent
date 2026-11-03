@@ -4,7 +4,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from yasa_vulnagent.agent.context import compact_json
 from yasa_vulnagent.stages.discover.confirm.node import _task_context as confirm_context
@@ -156,23 +155,22 @@ class ConfirmTaskContextTest(unittest.TestCase):
                         "paths": ["a.py"],
                     }
                 )
-                hints = [{"path": "a.py", "hint": "h" * 2000} for _ in range(30)]
-                with patch(
-                    "yasa_vulnagent.stages.discover.confirm.node.build_source_hints",
-                    return_value=hints,
-                ):
-                    text = confirm_context(
-                        ledger,
-                        {
-                            "task_id": "c1",
-                            "candidate_ids": ["e1"],
-                            "paths": ["a.py"],
-                        },
-                        limit=4000,
-                    )
+                text = confirm_context(
+                    ledger,
+                    {
+                        "task_id": "c1",
+                        "candidate_ids": ["e1"],
+                        "paths": ["a.py"],
+                    },
+                    limit=4000,
+                )
         parsed = json.loads(text)
         self.assertLessEqual(len(text), 4000)
         self.assertNotIn("priority_hints", parsed)
+        self.assertEqual(
+            set(parsed["candidates"][0]),
+            {"entry_id", "path", "line_start", "line_end", "summary"},
+        )
         self.assertEqual(parsed["candidates"][0]["entry_id"], "e1")
 
 

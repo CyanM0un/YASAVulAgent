@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,14 @@ class _Model:
         self.calls += 1
         self.prompts.append(str(messages[-1].content))
         return _Response(self.response)
+
+
+class _Usage:
+    def __init__(self, *, total_tokens: int) -> None:
+        self.total_tokens = total_tokens
+
+    def snapshot(self):
+        return {"totals": {"total_tokens": self.total_tokens}}
 
 
 class DiscoverReviewTest(unittest.TestCase):
@@ -248,6 +257,51 @@ class DiscoverReviewTest(unittest.TestCase):
             self.assertEqual(result["next_action"], "confirm")
             self.assertGreater(result["debt_count"], 0)
             self.assertTrue(result["review"]["blocking_gaps"])
+
+    def test_time_budget_forces_finalize_without_model_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = self._state(root)
+            state["discover_deadline"] = "2020-01-01T00:00:00+00:00"
+            context = self._context(root, None)
+            context = replace(
+                context, settings=replace(context.settings, discover_timeout=3600)
+            )
+            result = review(state, SimpleNamespace(context=context))
+            self.assertEqual(result["next_action"], "finalize")
+            self.assertIn("time budget", result["stop_reason"])
+            self.assertEqual(result["review"]["status"], "partial")
+            self.assertEqual(result["review"]["model_calls"], 0)
+            self.assertGreater(result["review"]["debt_remaining"], 0)
+            self.assertNotIn(
+                "runtime context is unavailable",
+                " ".join(result["review"]["blocking_gaps"]),
+            )
+
+    def test_token_budget_forces_finalize(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = self._state(root)
+            context = self._context(root, None)
+            context = replace(
+                context,
+                settings=replace(context.settings, discover_max_total_tokens=100),
+                usage=_Usage(total_tokens=100),
+            )
+            result = review(state, SimpleNamespace(context=context))
+            self.assertEqual(result["next_action"], "finalize")
+            self.assertIn("token budget", result["stop_reason"])
+            self.assertEqual(result["review"]["model_calls"], 0)
+
+    def test_zero_budgets_do_not_stop_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = self._state(root)
+            state["discover_deadline"] = "2020-01-01T00:00:00+00:00"
+            model = _Model('{"route":"finalize","dispositions":[],"new_tasks":[]}')
+            result = review(state, SimpleNamespace(context=self._context(root, model)))
+            self.assertEqual(result["next_action"], "confirm")
+            self.assertNotIn("budget", result["stop_reason"])
 
     def test_finalize_with_open_debt_is_partial(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

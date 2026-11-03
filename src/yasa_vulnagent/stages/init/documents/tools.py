@@ -65,7 +65,7 @@ _SPECIAL_NAMES = {
     "security",
     "changelog",
 }
-_URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://[^\s<>\"')\]`(]+", re.IGNORECASE)
 
 
 class _HTMLTextParser(HTMLParser):
@@ -719,7 +719,11 @@ class DocumentToolbox:
 
     @staticmethod
     def _normalize_url(url: str) -> str:
-        parsed = urlparse(urldefrag(url)[0])
+        try:
+            parsed = urlparse(urldefrag(url)[0])
+        except ValueError:
+            # Markdown links and bracketed hosts can produce strings urlparse rejects.
+            return ""
         if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username:
             return ""
         return urldefrag(url)[0]

@@ -4,6 +4,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -214,6 +215,52 @@ class DiscoverGraphTest(unittest.TestCase):
                 run_stage(state, runtime=SimpleNamespace(context=context))
 
         self.assertEqual(captured["config"], {"recursion_limit": 77})
+
+    def test_discover_timeout_sets_a_deadline_only_when_configured(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _Graph:
+            def invoke(self, state, **_kwargs):
+                captured["state"] = state
+                return {"status": "partial"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "repository"
+            repository.mkdir()
+            state = {
+                "repository": str(repository),
+                "stages_dir": str(root / "stages"),
+                "stages": [{"name": "init", "status": "partial"}],
+                "run_file": str(root / "run.json"),
+            }
+
+            def run(timeout: int) -> dict[str, object]:
+                settings = Settings(
+                    api_key=None,
+                    base_url="https://example.invalid",
+                    model="test-model",
+                    discover_timeout=timeout,
+                )
+                context = RunContext(settings=settings)
+                with (
+                    patch.object(discover_graph, "build_discover_graph", return_value=_Graph()),
+                    patch(
+                        "yasa_vulnagent.stages.discover.node.summarize",
+                        return_value={"status": "partial"},
+                    ),
+                ):
+                    run_stage(state, runtime=SimpleNamespace(context=context))
+                return dict(captured["state"])
+
+            unlimited = run(0)
+            self.assertNotIn("discover_deadline", unlimited)
+
+            before = datetime.now(timezone.utc)
+            bounded = run(3600)
+            deadline = datetime.fromisoformat(str(bounded["discover_deadline"]))
+            self.assertGreaterEqual(deadline, before + timedelta(seconds=3590))
+            self.assertLessEqual(deadline, datetime.now(timezone.utc) + timedelta(seconds=3610))
 
     def test_prepare_requires_init_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

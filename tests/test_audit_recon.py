@@ -228,6 +228,77 @@ class ReconTest(unittest.TestCase):
             self.assertEqual(audit["mechanism_checks"], [{"id": "mechanism-keep"}])
             self.assertEqual(model.calls, 1)
 
+    def test_historical_reference_without_source_is_dropped(self) -> None:
+        payload = _payload()
+        payload["constraints"][0]["historical_references"] = [
+            {"path": SOURCE, "text": "invented"},
+            {"source": "commit abc1234", "commit": "abc1234", "path": SOURCE, "text": "kept"},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            state, paths, _repository = _state(Path(temporary), tasks=[_task()])
+            with patch("yasa_vulnagent.stages.audit.recon.execution.open_yasa_mcp", _no_mcp):
+                run_coroutine(run_recon_stage(state, _context(_Model(payload))))
+            business = json.loads(paths.business_file.read_text(encoding="utf-8"))
+            references = business["constraints"][0]["historical_references"]
+            self.assertEqual([item["source"] for item in references], ["commit abc1234"])
+
+    def test_out_of_range_constraint_evidence_is_dropped_not_fatal(self) -> None:
+        payload = _payload()
+        payload["constraints"][0]["counterevidence"] = [
+            {"path": SOURCE, "start_line": 1, "end_line": 9999, "explanation": "invented range"}
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            state, paths, _repository = _state(Path(temporary), tasks=[_task()])
+            with patch("yasa_vulnagent.stages.audit.recon.execution.open_yasa_mcp", _no_mcp):
+                run_coroutine(run_recon_stage(state, _context(_Model(payload))))
+            business = json.loads(paths.business_file.read_text(encoding="utf-8"))
+            constraint = business["constraints"][0]
+            self.assertEqual(constraint["counterevidence"], [])
+            self.assertEqual(constraint["supporting_evidence"][0]["start_line"], 1)
+            self.assertTrue(
+                any("line range is outside the file" in gap for gap in business["gaps"])
+            )
+
+    def test_unknown_task_id_drops_investigation_instead_of_failing(self) -> None:
+        payload = _payload()
+        valid = payload["investigations"][0]
+        payload["investigations"] = [
+            {**valid, "id": "investigation-truncated", "task_id": "task-entry-entry-2e0a738ace444a3f"},
+            valid,
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            state, paths, _repository = _state(Path(temporary), tasks=[_task()])
+            with patch("yasa_vulnagent.stages.audit.recon.execution.open_yasa_mcp", _no_mcp):
+                run_coroutine(run_recon_stage(state, _context(_Model(payload))))
+            business = json.loads(paths.business_file.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["id"] for item in business["investigations"]],
+                ["investigation-tenant-binding"],
+            )
+            self.assertTrue(any("unknown task_id" in gap for gap in business["gaps"]))
+
+    def test_unknown_operation_entry_id_drops_only_that_record(self) -> None:
+        payload = _payload()
+        payload["operations"][0]["entry_ids"] = ["entry-missing"]
+        with tempfile.TemporaryDirectory() as temporary:
+            state, paths, _repository = _state(Path(temporary), tasks=[_task()])
+            with patch("yasa_vulnagent.stages.audit.recon.execution.open_yasa_mcp", _no_mcp):
+                run_coroutine(run_recon_stage(state, _context(_Model(payload))))
+            business = json.loads(paths.business_file.read_text(encoding="utf-8"))
+            self.assertEqual(business["operations"], [])
+            self.assertTrue(any("entry_ids: unknown ids" in gap for gap in business["gaps"]))
+
+    def test_unknown_origin_task_drops_logic_task_instead_of_failing(self) -> None:
+        payload = _payload()
+        payload["logic_tasks"][0]["origin_task_ids"] = ["task-missing"]
+        with tempfile.TemporaryDirectory() as temporary:
+            state, paths, _repository = _state(Path(temporary), tasks=[_task()])
+            with patch("yasa_vulnagent.stages.audit.recon.execution.open_yasa_mcp", _no_mcp):
+                result = run_coroutine(run_recon_stage(state, _context(_Model(payload))))
+            business = json.loads(paths.business_file.read_text(encoding="utf-8"))
+            self.assertEqual(result["recon"]["logic_task_count"], 0)
+            self.assertTrue(any("unknown origin task" in gap for gap in business["gaps"]))
+
     def test_missing_model_with_tasks_fails_without_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state, paths, _repository = _state(Path(temporary), tasks=[_task()])
@@ -235,14 +306,18 @@ class ReconTest(unittest.TestCase):
                 run_coroutine(run_recon_stage(state, _context(None, api_key=None)))
             self.assertFalse(paths.business_file.exists())
 
-    def test_invalid_evidence_fails_without_sidecar(self) -> None:
+    def test_out_of_scope_evidence_is_dropped_and_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state, paths, _repository = _state(Path(temporary), tasks=[_task()])
             model = _Model(_payload(evidence_path="src/other.py"))
             with patch("yasa_vulnagent.stages.audit.recon.execution.open_yasa_mcp", _no_mcp):
-                with self.assertRaises(ReconModelError):
-                    run_coroutine(run_recon_stage(state, _context(model)))
-            self.assertFalse(paths.business_file.exists())
+                run_coroutine(run_recon_stage(state, _context(model)))
+            business = json.loads(paths.business_file.read_text(encoding="utf-8"))
+            self.assertEqual(business["constraints"][0]["supporting_evidence"], [])
+            self.assertEqual(business["operations"], [])
+            self.assertTrue(
+                any("path is outside the audit scope" in gap for gap in business["gaps"])
+            )
 
     def test_source_revision_mismatch_fails_without_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

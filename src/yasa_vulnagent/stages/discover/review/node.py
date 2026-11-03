@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections import Counter
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from ....observability import trace_node
 from ....storage import utc_now
 from ....workflow.state import RunContext
 from ..agent import run_task_agent_sync, task_tool_store
+from ..budget import exceeded_reason
 from ..evidence import validate_refs
 from ..features import process_observations, resume_incomplete_queries
 from ..ledger import DiscoverLedger
@@ -63,6 +65,7 @@ def review(
             else {"handoffs": 0, "mechanisms": 0, "queries": 0, "candidates": 0, "tasks": 0}
         )
         debt = ledger.debt_items()
+        budget_reason = exceeded_reason(state, context)
         record: dict[str, Any] = {
             "status": "complete" if not debt else "partial",
             "round": round_number,
@@ -81,7 +84,7 @@ def review(
             "feature_repair": repair,
         }
         record["warnings"].extend(_source_hint_warnings(ledger))
-        if debt and context is not None:
+        if debt and context is not None and not budget_reason:
             _review_debt(
                 ledger,
                 debt,
@@ -92,7 +95,7 @@ def review(
                 next_wave=next_wave,
                 artifact_dir=artifact_dir,
             )
-        elif debt:
+        elif debt and context is None:
             record["status"] = "partial"
             record["route"] = _route_for_debt(debt)
             record["blocking_gaps"] = ["review runtime context is unavailable"]
@@ -111,7 +114,12 @@ def review(
         else:
             record["route"] = "finalize"
             record["status"] = "complete"
+        if budget_reason:
+            record["route"] = "finalize"
+            record["status"] = "partial"
+            record["blocking_gaps"] = [*record.get("blocking_gaps", []), budget_reason]
         record["debt_remaining"] = len(remaining)
+        record["blocking_gap_count"] = len(record.get("blocking_gaps", []))
         if record.get("blocking_gaps"):
             ledger.add_messages(gaps=list(record["blocking_gaps"]))
         if record.get("warnings"):
@@ -146,7 +154,9 @@ def review(
             "gaps": ledger.messages("gaps"),
             "warnings": ledger.messages("warnings"),
             "stop_reason": (
-                "review_complete"
+                budget_reason
+                if budget_reason
+                else "review_complete"
                 if record["status"] == "complete"
                 else "review_unavailable"
                 if record["blocking_gaps"] and record["model_calls"] == 0
@@ -318,11 +328,20 @@ def _review_debt(
     }
     toolbox = ReviewToolbox(repository, allowed_paths)
     prompt = _load_prompt()
+    disposition_rows = ledger.disposition_rows()
     user_prompt = json.dumps(
         {
             "round": round_number,
             "debt": debt[:200],
-            "existing_dispositions": ledger.disposition_rows(),
+            "existing_dispositions": {
+                "counts": dict(
+                    Counter(str(row.get("status", "")) for row in disposition_rows)
+                ),
+                "status_by_debt": {
+                    str(row.get("debt_id", "")): str(row.get("status", ""))
+                    for row in disposition_rows
+                },
+            },
             "limits": {
                 "max_new_tasks": getattr(settings, "planner_max_new_tasks", 2),
                 "max_files": getattr(settings, "planner_max_files", 8),

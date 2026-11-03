@@ -4,6 +4,7 @@ import fnmatch
 import json
 import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -160,8 +161,16 @@ class SourceToolbox:
         cursor: str = "",
     ) -> dict[str, Any]:
         root = self._safe_path(path, directory=True)
+        single = ""
         if root is None or not root.exists():
-            return self._error("search_text", path, "path is unavailable")
+            target = self._safe_path(path)
+            if target is None or not target.is_file():
+                return self._error(
+                    "search_text",
+                    path,
+                    "file is unavailable; it is missing or outside this task's scope",
+                )
+            root, single = target, self._relative(target)
         limit = max(1, min(int(max_results), 100))
         matches: list[dict[str, Any]] = []
         needle = str(query).lower()
@@ -169,15 +178,17 @@ class SourceToolbox:
         previous = cursor
         scanned = 0
         skipped_large = 0
-        for relative in self._iter_allowed_paths(after=cursor):
+        for relative in ([single] if single else self._iter_allowed_paths(after=cursor)):
             candidate = self.repository / relative
-            if not self._under(root, candidate):
+            if not single and not self._under(root, candidate):
                 continue
             try:
-                size = self._stat(candidate).st_size
+                info = self._stat(candidate)
             except OSError:
                 continue
-            if size > self.search_max_file_bytes:
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            if info.st_size > self.search_max_file_bytes:
                 skipped_large += 1
                 continue
             if scanned >= self.max_scan_files:
@@ -235,7 +246,11 @@ class SourceToolbox:
     ) -> dict[str, Any]:
         file_path = self._safe_path(path)
         if file_path is None or not file_path.is_file():
-            return self._error("read_file", path, "file is unavailable")
+            return self._error(
+                "read_file",
+                path,
+                "file is unavailable; it is missing or outside this task's scope",
+            )
         try:
             lines = self._lines(file_path)
         except OSError as exc:

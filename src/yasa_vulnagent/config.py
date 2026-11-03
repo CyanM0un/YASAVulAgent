@@ -33,6 +33,8 @@ DEFAULT_SCREEN_TOOL_OUTPUT_CHARS = 12000
 DEFAULT_SCREEN_CONTEXT_CHARS = 40000
 DEFAULT_SCREEN_TASK_MAX_ROUNDS = 16
 DEFAULT_DISCOVER_RECURSION_LIMIT = 50
+DEFAULT_DISCOVER_TIMEOUT = 0
+DEFAULT_DISCOVER_MAX_TOTAL_TOKENS = 0
 DEFAULT_DISCOVER_CONTEXT_TOKENS = 10000
 DEFAULT_DISCOVER_REQUEST_TIMEOUT = 180
 DEFAULT_DISCOVER_SEARCH_MAX_FILE_BYTES = 2_097_152
@@ -197,6 +199,8 @@ class Settings:
     screen_wave_max_tasks: int = DEFAULT_SCREEN_WAVE_MAX_TASKS
     screen_task_max_rounds: int = DEFAULT_SCREEN_TASK_MAX_ROUNDS
     discover_recursion_limit: int = DEFAULT_DISCOVER_RECURSION_LIMIT
+    discover_timeout: int = DEFAULT_DISCOVER_TIMEOUT
+    discover_max_total_tokens: int = DEFAULT_DISCOVER_MAX_TOTAL_TOKENS
     audit_mode: str = DEFAULT_AUDIT_MODE
     audit_timeout: int = DEFAULT_AUDIT_TIMEOUT
     audit_recursion_limit: int = DEFAULT_AUDIT_RECURSION_LIMIT
@@ -336,6 +340,8 @@ class Settings:
             "screen_wave_max_tasks": self.screen_wave_max_tasks,
             "screen_task_max_rounds": self.screen_task_max_rounds,
             "discover_recursion_limit": self.discover_recursion_limit,
+            "discover_timeout": self.discover_timeout,
+            "discover_max_total_tokens": self.discover_max_total_tokens,
             "audit_mode": self.audit_mode,
             "audit_timeout": self.audit_timeout,
             "audit_recursion_limit": self.audit_recursion_limit,
@@ -606,6 +612,12 @@ def load_settings(env_file: Path | None = None) -> Settings:
         ),
         discover_recursion_limit=positive_int(
             "DISCOVER_RECURSION_LIMIT", DEFAULT_DISCOVER_RECURSION_LIMIT
+        ),
+        discover_timeout=non_negative_int(
+            "DISCOVER_TIMEOUT", DEFAULT_DISCOVER_TIMEOUT
+        ),
+        discover_max_total_tokens=non_negative_int(
+            "DISCOVER_MAX_TOTAL_TOKENS", DEFAULT_DISCOVER_MAX_TOTAL_TOKENS
         ),
         audit_mode=read_audit_mode(),
         audit_timeout=positive_int("AUDIT_TIMEOUT", DEFAULT_AUDIT_TIMEOUT),

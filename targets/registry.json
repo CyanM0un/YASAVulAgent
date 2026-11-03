@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "measured_at": "2026-11-02",
+  "analyzer": {
+    "name": "yasa-vulnagent",
+    "supported_languages": [
+      "java",
+      "python",
+      "javascript",
+      "go",
+      "php"
+    ],
+    "notes": "YASA parses .java/.py/.js/.ts/.go/.php only; .tsx/.jsx/.vue are not parsed."
+  },
+  "targets": [
+    {
+      "id": "healthchecks",
+      "repo": "healthchecks/healthchecks",
+      "url": "https://github.com/healthchecks/healthchecks",
+      "default_branch": "master",
+      "pinned_sha": "ab4b5c46d6ac8ee597ec5aefb379ecd632d6695c",
+      "pinned_at": "2026-11-01T11:15:07Z",
+      "language": "Python",
+      "stack": "Django",
+      "local_dir": "targets/healthchecks",
+      "selection": {
+        "why": "Small Django web service with a thin, readable request surface (ping/webhook/API endpoints), a SECURITY.md, and a maintainer who replies within hours; ships a Dockerfile and compose file, so the validate stage can build a runtime environment directly.",
+        "metrics": {
+          "pushed_at": "2026-11-01T11:15:18Z",
+          "stars": 10488,
+          "open_issues": 54,
+          "advisories": 1,
+          "last_advisory": "2023-01-23",
+          "maintainer_reply_rate": 0.65,
+          "median_first_maintainer_reply_hours": 1.9,
+          "sample_size": 20
+        },
+        "security": {
+          "policy_url": "https://github.com/healthchecks/healthchecks/security/policy",
+          "security_file": "SECURITY.md",
+          "dependabot": false,
+          "codeql": false
+        },
+        "build": {
+          "dockerfile": [
+            "docker/Dockerfile"
+          ],
+          "compose": [
+            "docker/docker-compose.yml"
+          ]
+        },
+        "source_profile": {
+          "yasa_files": 699,
+          "by_ext": {
+            ".py": 657,
+            ".js": 42
+          }
+        },
+        "caveats": [
+          "Only one published advisory (2023-01), so the report stage has little advisory history to anchor on."
+        ]
+      }
+    },
+    {
+      "id": "miniflux-v2",
+      "repo": "miniflux/v2",
+      "url": "https://github.com/miniflux/v2",
+      "default_branch": "main",
+      "pinned_sha": "faecfa2fac61a91f4f69550bb1afd506c4b51749",
+      "pinned_at": "2026-11-01T03:55:08Z",
+      "language": "Go",
+      "stack": "net/http + PostgreSQL",
+      "local_dir": "targets/miniflux-v2",
+      "selection": {
+        "why": "Compact Go web application (441 Go files) with a high request-handling surface — feeds, scrapers, OPML import, API — six published advisories, Dependabot plus CodeQL wired up, and a maintainer-authored SECURITY.md.",
+        "metrics": {
+          "pushed_at": "2026-11-01T03:55:11Z",
+          "stars": 9867,
+          "open_issues": 266,
+          "advisories": 6,
+          "last_advisory": "2026-06-18",
+          "maintainer_reply_rate": 0.15,
+          "median_first_maintainer_reply_hours": 9.8,
+          "sample_size": 20
+        },
+        "security": {
+          "policy_url": "https://github.com/miniflux/v2/security/policy",
+          "security_file": "SECURITY.md",
+          "dependabot": true,
+          "codeql": true
+        },
+        "build": {
+          "dockerfile": [
+            "packaging/debian/Dockerfile"
+          ],
+          "compose": [
+            ".devcontainer/docker-compose.yml"
+          ]
+        },
+        "source_profile": {
+          "yasa_files": 447,
+          "by_ext": {
+            ".py": 1,
+            ".js": 5,
+            ".go": 441
+          }
+        },
+        "caveats": [
+          "Measured first-maintainer-reply rate is the lowest of the three (15% of the newest 20 issues); the repository is still pushed to daily.",
+          "No production root Dockerfile — only a Debian packaging Dockerfile and a devcontainer compose file, so the validate stage may need to author its own environment."
+        ]
+      }
+    },
+    {
+      "id": "halo",
+      "repo": "halo-dev/halo",
+      "url": "https://github.com/halo-dev/halo",
+      "default_branch": "main",
+      "pinned_sha": "eec18c297c461db79c2ff11807da868aeb8dca6d",
+      "pinned_at": "2026-11-01T07:50:31Z",
+      "language": "Java",
+      "stack": "Spring Boot",
+      "local_dir": "targets/halo",
+      "selection": {
+        "why": "Largest Java (Spring Boot) codebase of the three (1383 Java files) and the most recently disclosed advisory (2026-10-21), which makes it the best exercise of YASA's Java search plus the init security-history patch graphs; root Dockerfile available.",
+        "metrics": {
+          "pushed_at": "2026-11-01T10:26:06Z",
+          "stars": 40098,
+          "open_issues": 104,
+          "advisories": 6,
+          "last_advisory": "2026-10-21",
+          "maintainer_reply_rate": 0.3,
+          "median_first_maintainer_reply_hours": 4.6,
+          "sample_size": 20
+        },
+        "security": {
+          "policy_url": "https://github.com/halo-dev/halo/security/policy",
+          "security_file": "SECURITY.md",
+          "dependabot": false,
+          "codeql": false
+        },
+        "build": {
+          "dockerfile": [
+            "Dockerfile"
+          ],
+          "compose": []
+        },
+        "source_profile": {
+          "yasa_files": 2282,
+          "by_ext": {
+            ".java": 1383,
+            ".js": 9,
+            ".ts": 890
+          }
+        },
+        "caveats": [
+          "Frontend is Vue (.vue, 392 files) plus a few .tsx; YASA will not parse those, so analysis is effectively Java-server-side.",
+          "Largest of the three: expect the longest YASA init within the 3600s timeout."
+        ]
+      }
+    }
+  ]
+}

@@ -7,7 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from yasa_vulnagent.config import Settings
-from yasa_vulnagent.stages.discover.confirm.node import _replay_unprocessed_tasks, confirm
+from yasa_vulnagent.stages.discover.agent import TASK_MAX_ATTEMPTS
+from yasa_vulnagent.stages.discover.confirm.node import (
+    _apply_task_result,
+    _checklist_hint,
+    _replay_unprocessed_tasks,
+    confirm,
+)
 from yasa_vulnagent.stages.discover.ledger import DiscoverLedger
 from yasa_vulnagent.stages.discover.schema import empty_state
 from yasa_vulnagent.workflow.state import RunContext
@@ -374,6 +380,79 @@ class DiscoverConfirmTest(unittest.TestCase):
                 (root / "artifacts" / "confirmed-entries.json").read_text(encoding="utf-8")
             )
             self.assertEqual(len(exported), 1)
+
+
+class DiscoverTaskLifecycleTest(unittest.TestCase):
+    def _task(self, task_id: str, *, status: str, attempts: int) -> dict:
+        return {
+            "task_id": task_id,
+            "kind": "confirm",
+            "status": status,
+            "attempts": attempts,
+            "view": "confirm",
+            "artifact_dir": "",
+        }
+
+    def test_exhausted_task_is_deferred_instead_of_reselected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with DiscoverLedger.open(Path(temporary) / "ledger.sqlite") as ledger:
+                ledger.put_task(self._task("confirm-1", status="partial", attempts=TASK_MAX_ATTEMPTS))
+                ledger.put_task(self._task("confirm-2", status="partial", attempts=0))
+                active = ledger.retire_exhausted_tasks(
+                    ledger.list_tasks(statuses={"pending", "partial"}, kind_prefix="confirm"),
+                    max_attempts=TASK_MAX_ATTEMPTS,
+                )
+                self.assertEqual([task["task_id"] for task in active], ["confirm-2"])
+                tasks = {task["task_id"]: task for task in ledger.list_tasks(kind_prefix="confirm")}
+                self.assertEqual(tasks["confirm-1"]["status"], "deferred")
+                self.assertEqual(tasks["confirm-2"]["status"], "partial")
+                deferred = ledger.disposition_rows(status="deferred")
+                self.assertEqual([item["debt_id"] for item in deferred], ["task:confirm-1"])
+                self.assertEqual(deferred[0]["reason"], "attempt_limit")
+
+    def test_checklist_hint_marks_pending_and_confirmed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with DiscoverLedger.open(Path(temporary) / "ledger.sqlite") as ledger:
+                for entry_id, status in (("entry-a", "candidate"), ("entry-b", "confirmed")):
+                    ledger.put_entry(
+                        {
+                            "entry_id": entry_id,
+                            "status": status,
+                            "kind": "feature_hit",
+                            "role": "source",
+                            "location": {"path": "views.py", "line_start": 5, "line_end": 9},
+                            "summary": f"summary {entry_id}",
+                        }
+                    )
+                task = {"candidate_ids": ["entry-a", "entry-b"]}
+                hint = _checklist_hint(ledger, task)
+                self.assertIn("entry-a [pending]", hint)
+                self.assertIn("entry-b [confirmed, no resubmission needed]", hint)
+                self.assertIn("views.py:5-9", hint)
+                self.assertEqual(_checklist_hint(ledger, {"candidate_ids": []}), "")
+
+    def test_missing_result_for_resolved_entry_is_not_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "repository"
+            repository.mkdir()
+            (repository / "views.py").write_text("line\n", encoding="utf-8")
+            with DiscoverLedger.open(root / "ledger.sqlite") as ledger:
+                for entry_id, status in (("entry-a", "candidate"), ("entry-b", "confirmed")):
+                    ledger.put_entry(
+                        {
+                            "entry_id": entry_id,
+                            "status": status,
+                            "kind": "feature_hit",
+                            "role": "source",
+                            "location": {"path": "views.py", "line_start": 1, "line_end": 1},
+                            "summary": "summary",
+                        }
+                    )
+                task = {"task_id": "confirm-1", "candidate_ids": ["entry-a", "entry-b"]}
+                _apply_task_result(repository, ledger, task, {"entry_results": []})
+                self.assertEqual(task["unknowns"], ["missing entry result for entry-a"])
+                self.assertEqual(task["status"], "partial")
 
 
 if __name__ == "__main__":

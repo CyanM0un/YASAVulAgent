@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import time
@@ -344,3 +345,46 @@ class RuntimeLoopTest(unittest.TestCase):
             self.assertTrue(result.receipts[0]["truncated"])
             reference = result.receipts[0]["artifact_ref"]
             self.assertTrue((Path(temporary) / reference).is_file())
+
+
+class ModelInvocationLoopTest(unittest.TestCase):
+    def test_model_call_survives_a_second_event_loop(self) -> None:
+        from yasa_vulnagent.agent.runtime import _invoke_model_async
+
+        class _LoopBoundModel:
+            """Mimics a model whose async client is bound to a closed event loop."""
+
+            def invoke(self, messages: list[object]) -> AIMessage:
+                return AIMessage(content="ok")
+
+            async def ainvoke(self, messages: list[object]) -> AIMessage:
+                raise RuntimeError("Event loop is closed")
+
+        model = _LoopBoundModel()
+        messages = [HumanMessage(content="hi")]
+        first = asyncio.run(_invoke_model_async(model, messages))
+        second = asyncio.run(_invoke_model_async(model, messages))
+        self.assertEqual(first.content, "ok")
+        self.assertEqual(second.content, "ok")
+
+
+class RoundLimitTest(unittest.TestCase):
+    def test_exhausted_rounds_report_round_limit(self) -> None:
+        class _AlwaysToolModel:
+            def bind_tools(self, _tools):
+                return self
+
+            def invoke(self, messages):
+                return _Response("", [{"name": "read_file", "args": {}, "id": "t1"}])
+
+        with self.assertRaises(BudgetStop) as error:
+            run_tool_loop(
+                _AlwaysToolModel(),
+                "system",
+                "user",
+                [_EchoTool()],
+                budget=TaskBudget(max_model_calls=10, hard_task_cap=10),
+                json_expected=False,
+                max_rounds=2,
+            )
+        self.assertEqual(error.exception.reason, "round_limit")

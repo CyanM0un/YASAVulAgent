@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -31,6 +31,14 @@ def _runtime_cwd(bin_path: Path) -> Path:
         if (candidate / "node_modules").is_dir():
             return candidate
     return bin_path
+
+
+async def _drain(stack: AsyncExitStack) -> None:
+    """Close the MCP stack; teardown errors are logged, never raised into the caller."""
+    try:
+        await stack.aclose()
+    except Exception as exc:
+        logger.warning("discover screen YASA MCP shutdown failed: %s", exc, exc_info=True)
 
 
 @asynccontextmanager
@@ -81,24 +89,31 @@ async def open_yasa_mcp(
         env=_environment(source_path, bin_path),
         cwd=str(_runtime_cwd(bin_path)),
     )
+    stack = AsyncExitStack()
     try:
-        async with stdio_client(server) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                timeout = max(1, int(getattr(settings, "yasa_mcp_timeout", 60)))
-                await asyncio.wait_for(session.initialize(), timeout=timeout)
-                listed = await asyncio.wait_for(session.list_tools(), timeout=timeout)
-                names = {tool.name for tool in listed.tools}
-                missing = {"search_symbol", "get_function", "get_class_by_name", "get_import_by_file"} - names
-                if missing:
-                    logger.warning("discover screen YASA MCP missing tools=%s", sorted(missing))
-                    yield None
-                    return
-                logger.info(
-                    "discover screen YASA MCP ready repository=%s tools=%s",
-                    repository,
-                    len(names),
-                )
-                yield session
+        read_stream, write_stream = await stack.enter_async_context(stdio_client(server))
+        session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+        timeout = max(1, int(getattr(settings, "yasa_mcp_timeout", 60)))
+        await asyncio.wait_for(session.initialize(), timeout=timeout)
+        listed = await asyncio.wait_for(session.list_tools(), timeout=timeout)
     except Exception as exc:
-        logger.warning("discover screen YASA MCP failed: %s", exc)
+        logger.warning("discover screen YASA MCP failed: %s", exc, exc_info=True)
+        await _drain(stack)
         yield None
+        return
+    names = {tool.name for tool in listed.tools}
+    missing = {"search_symbol", "get_function", "get_class_by_name", "get_import_by_file"} - names
+    if missing:
+        logger.warning("discover screen YASA MCP missing tools=%s", sorted(missing))
+        await _drain(stack)
+        yield None
+        return
+    logger.info(
+        "discover screen YASA MCP ready repository=%s tools=%s",
+        repository,
+        len(names),
+    )
+    try:
+        yield session
+    finally:
+        await _drain(stack)

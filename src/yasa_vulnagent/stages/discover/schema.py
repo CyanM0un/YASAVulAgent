@@ -149,6 +149,7 @@ class DiscoverState(TypedDict, total=False):
     handoff_items: list[dict[str, Any]]
     screen: dict[str, Any]
     next_action: str
+    discover_deadline: str
     loop_guard: dict[str, Any]
     warnings: list[str]
     gaps: list[str]

@@ -50,8 +50,8 @@ Constraint shape:
   "source_kind": "user_statement|documentation|test|permission_config|database_constraint|history|code|inference",
   "applicability": "applicable|not_applicable|unknown",
   "reason": "...",
-  "supporting_evidence": [],
-  "counterevidence": [],
+  "supporting_evidence": [Evidence],
+  "counterevidence": [Evidence],
   "historical_references": [],
   "unknowns": []
 }
@@ -63,6 +63,32 @@ Evidence shape:
   "end_line": 2,
   "explanation": "..."
 }
+
+Every evidence-bearing field (`evidence`, `supporting_evidence`, `counterevidence`,
+`locations`) is an array of Evidence objects in the shape above. A bare string, a
+path alone, or a line number alone is rejected by the schema.
+
+Cite only line ranges you actually read in this task. `start_line` must be at least
+1 and no greater than `end_line`, and `end_line` must not exceed the file's line
+count. A range outside the file is dropped, and the claim it supports becomes
+unsupported.
+
+Copy every identifier exactly as it appears in this prompt: `id`, `task_id`,
+`origin_task_ids`, `entry_ids`, `patch_ids`, and the id lists inside
+`business_refs`. Keep trailing suffixes such as `-4fa10902`. Never shorten,
+reformat, or invent an id: a record that references an unknown id is dropped.
+
+Historical reference shape:
+{
+  "source": "commit|issue|changelog|advisory (required, must be non-empty)",
+  "commit": "abc1234",
+  "path": "src/...",
+  "side": "before|after",
+  "text": "..."
+}
+
+Only list a historical reference when you can attribute it to a non-empty `source`.
+Leave `historical_references` empty rather than inventing a source.
 
 Operation shape:
 {
@@ -79,8 +105,8 @@ Operation shape:
   "calls": [],
   "external_boundaries": [],
   "transaction": "...",
-  "locations": [],
-  "evidence": [],
+  "locations": [Evidence],
+  "evidence": [Evidence],
   "historical_references": [],
   "unknowns": []
 }
@@ -102,7 +128,7 @@ Investigation shape:
   "reason": "...",
   "unknowns": [],
   "gaps": [],
-  "evidence": [],
+  "evidence": [Evidence],
   "historical_references": []
 }
 
@@ -117,7 +143,7 @@ Logic task shape:
   "paths": ["src/..."],
   "priority": "high|normal|low",
   "question": "...",
-  "evidence": []
+  "evidence": [Evidence]
 }
 
 Constraints:

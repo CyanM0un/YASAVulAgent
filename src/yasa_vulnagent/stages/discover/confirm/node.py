@@ -17,10 +17,9 @@ from ....agent.runtime import run_coroutine
 from ....observability import trace_node
 from ....storage import utc_now
 from ....workflow.state import RunContext
-from ..agent import run_task_agent, task_tool_store
+from ..agent import TASK_MAX_ATTEMPTS, run_task_agent, task_tool_store
 from ..evidence import validate_location, validate_refs
 from ..features import (
-    build_source_hints,
     ensure_confirm_tasks_for_candidates,
     process_observations,
 )
@@ -128,8 +127,17 @@ def _task_context(
         "origin": task.get("origin", "candidate"),
         "question": task.get("question", ""),
         "paths": _task_paths(ledger, task),
-        "candidates": [entry for entry in entries if entry],
-        "priority_hints": build_source_hints(ledger),
+        "candidates": [
+            {
+                "entry_id": str(entry.get("entry_id", "")),
+                "path": str((entry.get("location") or {}).get("path", "")),
+                "line_start": (entry.get("location") or {}).get("line_start"),
+                "line_end": (entry.get("location") or {}).get("line_end"),
+                "summary": str(entry.get("summary", ""))[:300],
+            }
+            for entry in entries
+            if entry
+        ],
         "source_policy": (
             "Read source to confirm. Do not confirm from a candidate summary alone. "
             "Keep broad cross-file work in screen_scope."
@@ -149,6 +157,31 @@ def _task_context(
             ),
         }
     return compact_json(context, limit, drop_keys=("priority_hints",))
+
+
+def _checklist_hint(ledger: DiscoverLedger, task: dict[str, Any]) -> str:
+    """Remind the model which candidates still need an entry result after compaction."""
+    candidate_ids = [str(item) for item in task.get("candidate_ids", [])]
+    if not candidate_ids:
+        return ""
+    lines = ["Candidate checklist (one entry_result per pending candidate is required):"]
+    for entry_id in candidate_ids:
+        entry = ledger.get_entry(entry_id) or {}
+        status = str(entry.get("status", "candidate"))
+        location = entry.get("location") if isinstance(entry.get("location"), dict) else {}
+        marker = "pending" if status == "candidate" else f"{status}, no resubmission needed"
+        lines.append(
+            f"- {entry_id} [{marker}] {location.get('path', '')}:"
+            f"{location.get('line_start', '')}-{location.get('line_end', '')} | "
+            f"{str(entry.get('summary', ''))[:120]}"
+        )
+    return "\n".join(lines)
+
+
+def _hint_text(source: Any, ledger: DiscoverLedger, task: dict[str, Any]) -> str:
+    notes = source.notes_text()
+    checklist = _checklist_hint(ledger, task)
+    return "\n\n".join(item for item in (notes, checklist) if item)
 
 
 def _validate_field(
@@ -324,6 +357,9 @@ def _apply_task_result(
     for entry_id in candidate_ids:
         result = by_id.get(entry_id)
         if result is None:
+            if str(entries.get(entry_id, {}).get("status", "candidate")) != "candidate":
+                # Already resolved by an earlier attempt; resubmitting is not required.
+                continue
             errors.append(f"missing entry result for {entry_id}")
             continue
         normalized, entry_errors, entry_warnings = _normalize_entry_result(
@@ -472,7 +508,7 @@ async def _run_one(
             store=store or task_tool_store(Path(str(task.get("artifact_dir", ".")))),
             settings=settings,
             max_rounds=16,
-            notes_provider=source.notes_text,
+            notes_provider=lambda: _hint_text(source, ledger, task),
         )
     except Exception as exc:
         task["read_ranges"] = [item for item in source.receipts if item.get("tool") == "read_file"]
@@ -599,7 +635,10 @@ def confirm(
             wave=max(1, int(state.get("screen", {}).get("wave", 1))),
             max_candidates=int(getattr(settings, "confirm_max_candidates", 8)) if settings else 8,
         )
-        pending = ledger.list_tasks(statuses={"pending", "partial", "running"}, kind_prefix="confirm")
+        pending = ledger.retire_exhausted_tasks(
+            ledger.list_tasks(statuses={"pending", "partial", "running"}, kind_prefix="confirm"),
+            max_attempts=TASK_MAX_ATTEMPTS,
+        )
         selected = pending[: max(1, int(getattr(settings, "confirm_max_tasks", 6)) if settings else 6)]
         for task in selected:
             task["status"] = "running"
@@ -715,7 +754,12 @@ def confirm(
                 }
 
         results, wave_meta = run_coroutine(execute())
+        attempts_before = {
+            str(item.get("task_id", "")): int(item.get("attempts", 0)) for item in selected
+        }
         for task in results:
+            failed = str(task.get("status", "")) != "complete"
+            task["attempts"] = attempts_before.get(str(task.get("task_id", "")), 0) + (1 if failed else 0)
             ledger.commit_task(dict(task))
             write_json(artifact_dir / "confirm" / "tasks" / f"{task.get('task_id', 'unknown')}.json", task)
         feature_summary = _process_confirm_observations(

@@ -70,6 +70,11 @@ def run_wave(
             normalized: list[dict[str, Any]] = []
             for task, result in zip(tasks, results):
                 if isinstance(result, Exception):
+                    logger.error(
+                        "discover screen task crashed task_id=%s",
+                        task.get("task_id"),
+                        exc_info=result,
+                    )
                     normalized.append(
                         _deferred_task(
                             task,

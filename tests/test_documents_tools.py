@@ -49,6 +49,19 @@ class DocumentsToolsTest(unittest.TestCase):
             path.write_text("two\n", encoding="utf-8")
             self.assertIn("two", toolbox.read_file("README.md")["text"])
 
+    def test_markdown_link_urls_register_without_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            repository.mkdir()
+            (repository / "docker.md").write_text(
+                "Run on [http://localhost:8000](http://localhost:8000) after start.\n",
+                encoding="utf-8",
+            )
+            toolbox = DocumentToolbox(repository, Path(temporary) / "artifacts")
+            result = toolbox.read_file("docker.md")
+            self.assertIn("localhost:8000", result["text"])
+            self.assertIn("http://localhost:8000", toolbox.allowed_urls)
+
 
 if __name__ == "__main__":
     unittest.main()

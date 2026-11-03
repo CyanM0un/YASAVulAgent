@@ -5,3 +5,18 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 tools/yasa/
+
+# local runtime (see scripts/bootstrap_env.sh)
+.venv/
+.uv-cache/
+.uv-python/
+.yasa-dl/
+.yasa-home/
+
+# yasa_mcp writes empty daily log files relative to the working directory
+logs/yasa*.log
+
+# vendored analysis targets: keep the manifest, ignore the clones
+targets/*
+!targets/README.md
+!targets/registry.json

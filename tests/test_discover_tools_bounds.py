@@ -101,6 +101,35 @@ class DiscoverToolBoundsTest(unittest.TestCase):
                 self.assertIn("x" * 20, notes)
                 self.assertEqual(ledger.note_count("task-1"), 2)
 
+    def test_search_accepts_a_single_file_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = self._repository(Path(temporary))
+            toolbox = SourceToolbox(repository, allowed_paths=["ok.py", "f0.py"])
+            result = toolbox.search_text("needle", path="ok.py")
+            self.assertEqual([item["path"] for item in result["matches"]], ["ok.py"])
+
+    def test_search_skips_scope_entries_that_are_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = self._repository(Path(temporary))
+            toolbox = SourceToolbox(repository, allowed_paths=[".", "ok.py"])
+            result = toolbox.search_text("needle")
+            self.assertEqual([item["path"] for item in result["matches"]], ["ok.py"])
+            self.assertEqual(
+                [item for item in toolbox.receipts if item.get("status") == "error"], []
+            )
+
+    def test_search_reports_missing_and_out_of_scope_paths_alike(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = self._repository(Path(temporary))
+            toolbox = SourceToolbox(repository, allowed_paths=["ok.py"])
+            existing = toolbox.search_text("needle", path="f0.py")
+            missing = toolbox.search_text("needle", path="nope.py")
+            self.assertEqual(
+                existing["error"],
+                "file is unavailable; it is missing or outside this task's scope",
+            )
+            self.assertEqual(existing["error"], missing["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

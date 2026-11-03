@@ -11,6 +11,8 @@ from langgraph.runtime import Runtime
 from ....observability import trace_node
 from ....storage import utc_now
 from ....workflow.state import RunContext
+from ..agent import TASK_MAX_ATTEMPTS
+from ..budget import exceeded_reason
 from ..features import ensure_confirm_tasks_for_candidates, process_observations
 from ..ledger import DiscoverLedger
 from ..schema import DiscoverState
@@ -36,6 +38,10 @@ def screen(
 ) -> dict[str, object]:
     """Schedule and execute one bounded screen wave from the run-local ledger."""
     context = runtime.context if runtime is not None else None
+    budget_reason = exceeded_reason(state, context)
+    if budget_reason:
+        logger.info("discover screen skipped: %s", budget_reason)
+        return {"next_action": "finalize", "stop_reason": budget_reason}
     artifact_dir = Path(state["artifact_dir"])
     repository = Path(state["repository"])
     screen_meta = dict(state.get("screen", {}))
@@ -75,7 +81,10 @@ def screen(
             "new_task_ids": [],
             "error": "",
         }
-        pending = ledger.list_tasks(statuses={"pending", "partial"}, kind_prefix="screen")
+        pending = ledger.retire_exhausted_tasks(
+            ledger.list_tasks(statuses={"pending", "partial"}, kind_prefix="screen"),
+            max_attempts=TASK_MAX_ATTEMPTS,
+        )
         if not screen_meta.get("initial_wave_complete"):
             initial_views = {name for name, _, _ in _INITIAL_VIEWS}
             pending = [
@@ -128,7 +137,10 @@ def screen(
                 ledger.put_task(task)
             if plan.error:
                 ledger.add_messages(warnings=[f"screen planner: {plan.error}"])
-            pending = ledger.list_tasks(statuses={"pending", "partial"}, kind_prefix="screen")
+            pending = ledger.retire_exhausted_tasks(
+                ledger.list_tasks(statuses={"pending", "partial"}, kind_prefix="screen"),
+                max_attempts=TASK_MAX_ATTEMPTS,
+            )
         selected = _select_tasks(pending, plan.selected_task_ids, max_tasks)
         for task in selected:
             task["status"] = "running"
@@ -158,7 +170,12 @@ def screen(
             wave_meta = {"status": "complete", "task_count": 0, "reason": "no pending screen tasks"}
 
         candidate_before = ledger.count_entries("candidate")
+        attempts_before = {
+            str(item.get("task_id", "")): int(item.get("attempts", 0)) for item in selected
+        }
         for task in results:
+            failed = str(task.get("status", "")) != "complete"
+            task["attempts"] = attempts_before.get(str(task.get("task_id", "")), 0) + (1 if failed else 0)
             ledger.commit_task(dict(task))
 
         feature_summary = _process_screen_observations(

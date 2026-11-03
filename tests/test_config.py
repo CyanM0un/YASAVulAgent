@@ -20,11 +20,15 @@ class DiscoverLimitConfigTest(unittest.TestCase):
         settings = self._load()
 
         self.assertEqual(settings.discover_recursion_limit, 50)
+        self.assertEqual(settings.discover_timeout, 0)
+        self.assertEqual(settings.discover_max_total_tokens, 0)
         self.assertEqual(settings.screen_task_max_rounds, 16)
         self.assertEqual(settings.screen_wave_timeout, 1200)
         self.assertEqual(settings.screen_wave_model_calls, 96)
         self.assertEqual(settings.planner_max_calls, 6)
         self.assertEqual(settings.safe_dict()["discover_recursion_limit"], 50)
+        self.assertEqual(settings.safe_dict()["discover_timeout"], 0)
+        self.assertEqual(settings.safe_dict()["discover_max_total_tokens"], 0)
         self.assertEqual(settings.safe_dict()["screen_task_max_rounds"], 16)
 
     def test_discover_limits_read_from_environment(self) -> None:
@@ -33,12 +37,22 @@ class DiscoverLimitConfigTest(unittest.TestCase):
             DISCOVER_SCREEN_TASK_MAX_ROUNDS="24",
             DISCOVER_SCREEN_WAVE_TIMEOUT="1800",
             DISCOVER_SCREEN_WAVE_MODEL_CALLS="144",
+            DISCOVER_TIMEOUT="3600",
+            DISCOVER_MAX_TOTAL_TOKENS="5000000",
         )
 
         self.assertEqual(settings.discover_recursion_limit, 81)
+        self.assertEqual(settings.discover_timeout, 3600)
+        self.assertEqual(settings.discover_max_total_tokens, 5000000)
         self.assertEqual(settings.screen_task_max_rounds, 24)
         self.assertEqual(settings.screen_wave_timeout, 1800)
         self.assertEqual(settings.screen_wave_model_calls, 144)
+
+    def test_negative_discover_budgets_are_rejected(self) -> None:
+        for name in ("DISCOVER_TIMEOUT", "DISCOVER_MAX_TOTAL_TOKENS"):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    self._load(**{name: "-1"})
 
     def test_explicit_legacy_budget_values_still_apply(self) -> None:
         settings = self._load(

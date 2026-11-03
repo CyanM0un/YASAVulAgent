@@ -17,6 +17,9 @@ from ...agent.runtime import (
 from ...agent.tokens import TokenCounter
 from .screen.model import ScreenConfigurationError, ScreenError
 
+# A task that keeps ending partial must not be re-selected forever.
+TASK_MAX_ATTEMPTS = 2
+
 
 def task_tool_store(artifact_dir: Path) -> ToolResultStore:
     """One content-addressed store per stage artifact directory."""

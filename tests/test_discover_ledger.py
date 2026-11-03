@@ -247,5 +247,43 @@ class DiscoverLedgerTest(unittest.TestCase):
                 self.assertTrue(result["coverage_complete"])
 
 
+class DiscoverLedgerThreadTest(unittest.TestCase):
+    def test_worker_threads_read_through_their_own_connections(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "ledger.sqlite"
+            ledger = DiscoverLedger.open(path)
+            ledger.put_task({"task_id": "screen-0001", "kind": "screen", "status": "pending"})
+            main_connection = ledger.connection
+            barrier = threading.Barrier(4)
+            seen: list[int] = []
+            errors: list[str] = []
+            lock = threading.Lock()
+
+            def worker() -> None:
+                try:
+                    barrier.wait()
+                    connection = ledger.connection
+                    for _ in range(25):
+                        if ledger.get_task("screen-0001") is None:
+                            raise AssertionError("task missing")
+                    with lock:
+                        seen.append(id(connection))
+                except Exception as exc:  # noqa: BLE001 - surface thread failures
+                    with lock:
+                        errors.append(str(exc))
+
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(set(seen)), 4)
+            self.assertNotIn(id(main_connection), set(seen))
+            self.assertIs(ledger.connection, main_connection)
+            ledger.close()
+
+
 if __name__ == "__main__":
     unittest.main()

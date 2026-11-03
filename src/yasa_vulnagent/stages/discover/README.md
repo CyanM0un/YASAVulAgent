@@ -129,6 +129,8 @@ File coverage and candidate handling must be counted separately:
 
 Wave and task limits are configuration, not protocol: `DISCOVER_SCREEN_WAVE_TIMEOUT`, `DISCOVER_SCREEN_WAVE_MODEL_CALLS`, `DISCOVER_SCREEN_WAVE_MAX_TASKS`, `DISCOVER_SCREEN_TASK_MAX_ROUNDS`, and `DISCOVER_RECURSION_LIMIT`. Defaults are a starting point; tune them after measuring tool and model behavior.
 
+Stage-wide budgets are checked at each review boundary: `DISCOVER_TIMEOUT` (wall clock, seconds) and `DISCOVER_MAX_TOTAL_TOKENS` (input+output tokens), both with 0 meaning unlimited. When a budget is exhausted, review routes to `finalize`, records the reason in `stop_reason` and `gaps`, and keeps the work done so far; a resumed run starts a fresh timeout window.
+
 Stage state is stored under `stages/discover/` in the run directory.
 
 `state.json` stores only the ledger path, counters, current node's `next_action`, compact summaries, and loop-protection state. The run-local `ledger.sqlite` owns the growing inventory, task queue, scopes, read receipts, task notes, candidates, evidence, and full gap list. Tool connections, model objects, and other runtime dependencies remain only in `RunContext`.

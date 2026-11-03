@@ -168,7 +168,10 @@ class DiscoverLedger:
 
     def __init__(self, path: Path, connection: sqlite3.Connection) -> None:
         self.path = path
-        self.connection = connection
+        self._connection = connection
+        self._owner = threading.get_ident()
+        self._local = threading.local()
+        self._thread_connections: list[sqlite3.Connection] = []
         self._lock = threading.RLock()
 
     @classmethod
@@ -185,8 +188,36 @@ class DiscoverLedger:
         connection.commit()
         return cls(path, connection)
 
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Return this thread's connection.
+
+        Screen task graphs run their sync nodes in a worker thread, so several
+        threads share one ledger. A sqlite3 connection is not thread-safe: every
+        thread gets its own connection to the same WAL database instead.
+        """
+        if threading.get_ident() == self._owner:
+            return self._connection
+        connection = getattr(self._local, "connection", None)
+        if connection is not None:
+            return connection
+        connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        self._local.connection = connection
+        with self._lock:
+            self._thread_connections.append(connection)
+        return connection
+
     def close(self) -> None:
-        self.connection.close()
+        with self._lock:
+            for connection in self._thread_connections:
+                try:
+                    connection.close()
+                except sqlite3.Error:
+                    pass
+            self._thread_connections.clear()
+        self._connection.close()
 
     def __enter__(self) -> "DiscoverLedger":
         return self
@@ -438,6 +469,31 @@ class DiscoverLedger:
             ),
         )
         self.connection.commit()
+
+    def retire_exhausted_tasks(
+        self, tasks: list[dict[str, Any]], *, max_attempts: int
+    ) -> list[dict[str, Any]]:
+        """Drop tasks that exhausted their attempts, recording why instead of silently looping."""
+        active: list[dict[str, Any]] = []
+        for task in tasks:
+            task_id = str(task.get("task_id", ""))
+            if int(task.get("attempts", 0)) < max_attempts:
+                active.append(task)
+                continue
+            task["status"] = "deferred"
+            self.put_task(task)
+            self.put_disposition(
+                debt_id=f"task:{task_id}",
+                debt_type="task",
+                ref_id=task_id,
+                status="deferred",
+                reason="attempt_limit",
+                owner="discover",
+                evidence_refs=[],
+                source="attempt_limit",
+                reopen_condition="split the task or raise TASK_MAX_ATTEMPTS",
+            )
+        return active
 
     def _json_value(self, value: Any, default: Any) -> Any:
         if isinstance(value, (list, dict)):

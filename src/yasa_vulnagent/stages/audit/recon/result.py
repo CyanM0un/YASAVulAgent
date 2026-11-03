@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any, Iterable, Mapping
 
 from ..prepare.inventory import safe_relative
@@ -15,6 +16,8 @@ from .constants import (
     MAX_OPERATIONS,
 )
 from .model import ReconModelError
+
+LOGGER = logging.getLogger(__name__)
 
 SOURCE_KINDS = {
     "user_statement",
@@ -54,13 +57,17 @@ def validate_payload(
     patch_ids = {str(item.get("id", "")) for item in patches if item.get("id")}
     scope = {str(path) for path in scope_files if str(path)}
 
-    constraints = _constraints(payload.get("constraints"), evidence_index)
+    degraded: list[str] = []
+    constraints = _constraints(
+        payload.get("constraints"), evidence_index, degraded=degraded
+    )
     constraint_ids = {item["id"] for item in constraints}
     operations = _operations(
         payload.get("operations"),
         evidence_index=evidence_index,
         entry_ids=entry_ids,
         patch_ids=patch_ids,
+        degraded=degraded,
     )
     operation_ids = {item["id"] for item in operations}
     investigations = _investigations(
@@ -71,6 +78,7 @@ def validate_payload(
         patch_ids=patch_ids,
         constraint_ids=constraint_ids,
         operation_ids=operation_ids,
+        degraded=degraded,
     )
     investigation_ids = {item["id"] for item in investigations}
     evidence_by_ref = _evidence_by_ref(constraints, operations, investigations)
@@ -85,19 +93,22 @@ def validate_payload(
         evidence_by_ref=evidence_by_ref,
         existing_tasks=tasks,
         traces=traces or [],
+        degraded=degraded,
     )
     return {
         "constraints": constraints,
         "operations": operations,
         "investigations": investigations,
         "logic_tasks": logic_tasks,
-        "gaps": _strings(payload.get("gaps"), "gaps"),
+        "gaps": [*_strings(payload.get("gaps"), "gaps"), *degraded],
         "warnings": _strings(payload.get("warnings"), "warnings"),
         "limitations": _strings(payload.get("limitations"), "limitations"),
     }
 
 
-def _constraints(raw: Any, evidence_index: EvidenceIndex) -> list[dict[str, Any]]:
+def _constraints(
+    raw: Any, evidence_index: EvidenceIndex, *, degraded: list[str] | None = None
+) -> list[dict[str, Any]]:
     values = _array(raw, "constraints", MAX_CONSTRAINTS)
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -113,8 +124,18 @@ def _constraints(raw: Any, evidence_index: EvidenceIndex) -> list[dict[str, Any]
         if applicability not in APPLICABILITY:
             raise ReconModelError(f"{label}: unknown applicability {applicability}")
         description = _text(item.get("description"), f"{label}.description")
-        supporting = _evidence(item.get("supporting_evidence"), f"{label}.supporting_evidence", evidence_index)
-        counter = _evidence(item.get("counterevidence"), f"{label}.counterevidence", evidence_index)
+        supporting = _evidence(
+            item.get("supporting_evidence"),
+            f"{label}.supporting_evidence",
+            evidence_index,
+            gaps=degraded,
+        )
+        counter = _evidence(
+            item.get("counterevidence"),
+            f"{label}.counterevidence",
+            evidence_index,
+            gaps=degraded,
+        )
         result.append(
             {
                 "id": record_id,
@@ -137,52 +158,75 @@ def _operations(
     evidence_index: EvidenceIndex,
     entry_ids: set[str],
     patch_ids: set[str],
+    degraded: list[str],
 ) -> list[dict[str, Any]]:
     values = _array(raw, "operations", MAX_OPERATIONS)
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, item in enumerate(values):
         label = f"operations[{index}]"
-        item = _object(item, label)
-        record_id = _text(item.get("id"), f"{label}.id")
-        _unique(record_id, seen, label)
-        name = _text(item.get("name"), f"{label}.name")
-        locations = _evidence(item.get("locations"), f"{label}.locations", evidence_index)
-        evidence = _evidence(item.get("evidence"), f"{label}.evidence", evidence_index)
-        if not locations:
-            locations = evidence
-        if not evidence:
-            evidence = locations
-        if not evidence:
-            raise ReconModelError(f"{label}: operation needs current-source evidence")
-        selected_entry_ids = _known_ids(item.get("entry_ids"), entry_ids, f"{label}.entry_ids")
-        selected_patch_ids = _known_ids(item.get("patch_ids"), patch_ids, f"{label}.patch_ids")
-        result.append(
-            {
-                "id": record_id,
-                "name": name,
-                "entry_ids": selected_entry_ids,
-                "patch_ids": selected_patch_ids,
-                "actor": _json_value(item.get("actor")),
-                "resource": _json_value(item.get("resource")),
-                "guards": _strings(item.get("guards"), f"{label}.guards"),
-                "state_reads": _strings(item.get("state_reads"), f"{label}.state_reads"),
-                "state_writes": _strings(item.get("state_writes"), f"{label}.state_writes"),
-                "effects": _strings(item.get("effects"), f"{label}.effects"),
-                "calls": _strings(item.get("calls"), f"{label}.calls"),
-                "external_boundaries": _strings(
-                    item.get("external_boundaries"), f"{label}.external_boundaries"
-                ),
-                "transaction": _json_value(item.get("transaction")),
-                "locations": locations,
-                "evidence": evidence,
-                "historical_references": _historical(
-                    item.get("historical_references"), f"{label}.historical_references"
-                ),
-                "unknowns": _strings(item.get("unknowns"), f"{label}.unknowns"),
-            }
-        )
+        try:
+            record = _operation_record(
+                item,
+                label,
+                evidence_index=evidence_index,
+                entry_ids=entry_ids,
+                patch_ids=patch_ids,
+                seen=seen,
+            )
+        except ReconModelError as error:
+            degraded.append(f"dropped {error}")
+            continue
+        result.append(record)
     return result
+
+
+def _operation_record(
+    item: Any,
+    label: str,
+    *,
+    evidence_index: EvidenceIndex,
+    entry_ids: set[str],
+    patch_ids: set[str],
+    seen: set[str],
+) -> dict[str, Any]:
+    item = _object(item, label)
+    record_id = _text(item.get("id"), f"{label}.id")
+    _unique(record_id, seen, label)
+    name = _text(item.get("name"), f"{label}.name")
+    locations = _evidence(item.get("locations"), f"{label}.locations", evidence_index)
+    evidence = _evidence(item.get("evidence"), f"{label}.evidence", evidence_index)
+    if not locations:
+        locations = evidence
+    if not evidence:
+        evidence = locations
+    if not evidence:
+        raise ReconModelError(f"{label}: operation needs current-source evidence")
+    selected_entry_ids = _known_ids(item.get("entry_ids"), entry_ids, f"{label}.entry_ids")
+    selected_patch_ids = _known_ids(item.get("patch_ids"), patch_ids, f"{label}.patch_ids")
+    return {
+        "id": record_id,
+        "name": name,
+        "entry_ids": selected_entry_ids,
+        "patch_ids": selected_patch_ids,
+        "actor": _json_value(item.get("actor")),
+        "resource": _json_value(item.get("resource")),
+        "guards": _strings(item.get("guards"), f"{label}.guards"),
+        "state_reads": _strings(item.get("state_reads"), f"{label}.state_reads"),
+        "state_writes": _strings(item.get("state_writes"), f"{label}.state_writes"),
+        "effects": _strings(item.get("effects"), f"{label}.effects"),
+        "calls": _strings(item.get("calls"), f"{label}.calls"),
+        "external_boundaries": _strings(
+            item.get("external_boundaries"), f"{label}.external_boundaries"
+        ),
+        "transaction": _json_value(item.get("transaction")),
+        "locations": locations,
+        "evidence": evidence,
+        "historical_references": _historical(
+            item.get("historical_references"), f"{label}.historical_references"
+        ),
+        "unknowns": _strings(item.get("unknowns"), f"{label}.unknowns"),
+    }
 
 
 def _investigations(
@@ -194,64 +238,93 @@ def _investigations(
     patch_ids: set[str],
     constraint_ids: set[str],
     operation_ids: set[str],
+    degraded: list[str],
 ) -> list[dict[str, Any]]:
     values = _array(raw, "investigations", MAX_INVESTIGATIONS)
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, item in enumerate(values):
         label = f"investigations[{index}]"
-        item = _object(item, label)
-        record_id = _text(item.get("id"), f"{label}.id")
-        _unique(record_id, seen, label)
-        task_id = _text(item.get("task_id"), f"{label}.task_id")
-        if task_id not in task_by_id:
-            raise ReconModelError(f"{label}: unknown task_id {task_id}")
-        question = _text(item.get("question"), f"{label}.question")
-        outcome = _text(item.get("outcome"), f"{label}.outcome")
-        if outcome not in OUTCOMES:
-            raise ReconModelError(f"{label}: unknown outcome {outcome}")
-        selected_entry_ids = _known_ids(item.get("entry_ids"), entry_ids, f"{label}.entry_ids")
-        selected_patch_ids = _known_ids(item.get("patch_ids"), patch_ids, f"{label}.patch_ids")
-        refs = _known_refs(
-            item,
-            constraint_ids=constraint_ids,
-            operation_ids=operation_ids,
-            investigation_ids=set(),
-            label=label,
-        )
-        evidence = _evidence(item.get("evidence"), f"{label}.evidence", evidence_index)
-        if not evidence:
-            raise ReconModelError(f"{label}: investigation needs current-source evidence")
-        result.append(
-            {
-                "id": record_id,
-                "task_id": task_id,
-                "question": question,
-                "constraint_ids": refs["constraint_ids"],
-                "operation_ids": refs["operation_ids"],
-                "entry_ids": selected_entry_ids,
-                "patch_ids": selected_patch_ids,
-                "repair_unit_refs": _repair_refs(
-                    item.get("repair_unit_refs"), f"{label}.repair_unit_refs"
-                ),
-                "steps": _list_items(item.get("steps"), f"{label}.steps"),
-                "resource_bindings": _list_items(
-                    item.get("resource_bindings"), f"{label}.resource_bindings"
-                ),
-                "path_conditions": _strings(
-                    item.get("path_conditions"), f"{label}.path_conditions"
-                ),
-                "outcome": outcome,
-                "reason": _optional_text(item.get("reason")),
-                "unknowns": _strings(item.get("unknowns"), f"{label}.unknowns"),
-                "gaps": _strings(item.get("gaps"), f"{label}.gaps"),
-                "evidence": evidence,
-                "historical_references": _historical(
-                    item.get("historical_references"), f"{label}.historical_references"
-                ),
-            }
-        )
+        try:
+            record = _investigation_record(
+                item,
+                label,
+                evidence_index=evidence_index,
+                task_by_id=task_by_id,
+                entry_ids=entry_ids,
+                patch_ids=patch_ids,
+                constraint_ids=constraint_ids,
+                operation_ids=operation_ids,
+                seen=seen,
+            )
+        except ReconModelError as error:
+            degraded.append(f"dropped {error}")
+            continue
+        result.append(record)
     return result
+
+
+def _investigation_record(
+    item: Any,
+    label: str,
+    *,
+    evidence_index: EvidenceIndex,
+    task_by_id: Mapping[str, dict[str, Any]],
+    entry_ids: set[str],
+    patch_ids: set[str],
+    constraint_ids: set[str],
+    operation_ids: set[str],
+    seen: set[str],
+) -> dict[str, Any]:
+    item = _object(item, label)
+    record_id = _text(item.get("id"), f"{label}.id")
+    _unique(record_id, seen, label)
+    task_id = _text(item.get("task_id"), f"{label}.task_id")
+    if task_id not in task_by_id:
+        raise ReconModelError(f"{label}: unknown task_id {task_id}")
+    question = _text(item.get("question"), f"{label}.question")
+    outcome = _text(item.get("outcome"), f"{label}.outcome")
+    if outcome not in OUTCOMES:
+        raise ReconModelError(f"{label}: unknown outcome {outcome}")
+    selected_entry_ids = _known_ids(item.get("entry_ids"), entry_ids, f"{label}.entry_ids")
+    selected_patch_ids = _known_ids(item.get("patch_ids"), patch_ids, f"{label}.patch_ids")
+    refs = _known_refs(
+        item,
+        constraint_ids=constraint_ids,
+        operation_ids=operation_ids,
+        investigation_ids=set(),
+        label=label,
+    )
+    evidence = _evidence(item.get("evidence"), f"{label}.evidence", evidence_index)
+    if not evidence:
+        raise ReconModelError(f"{label}: investigation needs current-source evidence")
+    return {
+        "id": record_id,
+        "task_id": task_id,
+        "question": question,
+        "constraint_ids": refs["constraint_ids"],
+        "operation_ids": refs["operation_ids"],
+        "entry_ids": selected_entry_ids,
+        "patch_ids": selected_patch_ids,
+        "repair_unit_refs": _repair_refs(
+            item.get("repair_unit_refs"), f"{label}.repair_unit_refs"
+        ),
+        "steps": _list_items(item.get("steps"), f"{label}.steps"),
+        "resource_bindings": _list_items(
+            item.get("resource_bindings"), f"{label}.resource_bindings"
+        ),
+        "path_conditions": _strings(
+            item.get("path_conditions"), f"{label}.path_conditions"
+        ),
+        "outcome": outcome,
+        "reason": _optional_text(item.get("reason")),
+        "unknowns": _strings(item.get("unknowns"), f"{label}.unknowns"),
+        "gaps": _strings(item.get("gaps"), f"{label}.gaps"),
+        "evidence": evidence,
+        "historical_references": _historical(
+            item.get("historical_references"), f"{label}.historical_references"
+        ),
+    }
 
 
 def _logic_tasks(
@@ -266,6 +339,7 @@ def _logic_tasks(
     evidence_by_ref: Mapping[str, list[dict[str, Any]]],
     existing_tasks: list[dict[str, Any]],
     traces: list[dict[str, Any]],
+    degraded: list[str],
 ) -> list[dict[str, Any]]:
     values = _array(raw, "logic_tasks", MAX_LOGIC_TASKS)
     existing_questions = {
@@ -283,83 +357,124 @@ def _logic_tasks(
     seen_ids: set[str] = set()
     for index, item in enumerate(values):
         label = f"logic_tasks[{index}]"
-        item = _object(item, label)
-        origin_ids = _strings(item.get("origin_task_ids"), f"{label}.origin_task_ids")
-        if not origin_ids:
-            raise ReconModelError(f"{label}: origin_task_ids must not be empty")
-        origins: list[dict[str, Any]] = []
-        for origin_id in origin_ids:
-            origin = task_by_id.get(origin_id)
-            if origin is None:
-                raise ReconModelError(f"{label}: unknown origin task {origin_id}")
-            origins.append(origin)
-        question = _text(item.get("question"), f"{label}.question")
-        question_key = _question_key(question)
-        if (
-            question_key in existing_questions
-            or question_key in seen_questions
-            or _answered_by_trace(question_key, origin_ids, traces)
-        ):
+        try:
+            record = _logic_task_record(
+                item,
+                label,
+                evidence_index=evidence_index,
+                task_by_id=task_by_id,
+                scope=scope,
+                constraint_ids=constraint_ids,
+                operation_ids=operation_ids,
+                investigation_ids=investigation_ids,
+                evidence_by_ref=evidence_by_ref,
+                existing_questions=existing_questions,
+                existing_logic=existing_logic,
+                traces=traces,
+                seen_questions=seen_questions,
+                seen_ids=seen_ids,
+            )
+        except ReconModelError as error:
+            degraded.append(f"dropped {error}")
             continue
-        raw_refs = item.get("business_refs")
-        if raw_refs is not None and not isinstance(raw_refs, dict):
-            raise ReconModelError(f"{label}: business_refs must be an object")
-        refs = _known_refs(
-            raw_refs if isinstance(raw_refs, dict) else item,
-            constraint_ids=constraint_ids,
-            operation_ids=operation_ids,
-            investigation_ids=investigation_ids,
-            label=label,
-        )
-        if not any(refs.values()):
-            raise ReconModelError(f"{label}: business_refs must not be empty")
-        paths = _paths(item.get("paths"), scope, f"{label}.paths")
-        if not paths:
-            paths = [
-                str(path)
-                for origin in origins
-                for path in origin.get("paths", [])
-                if str(path) in scope
-            ]
-        paths = list(dict.fromkeys(paths))
-        if not paths:
-            raise ReconModelError(f"{label}: no in-scope paths for the follow-up task")
-        evidence = _evidence(item.get("evidence"), f"{label}.evidence", evidence_index)
-        if not evidence:
-            evidence = _ref_evidence(refs, evidence_by_ref)
-        task_id = _logic_id(origin_ids, question, refs, paths)
-        if task_id in seen_ids:
-            continue
-        seen_ids.add(task_id)
-        seen_questions.add(question_key)
-        entry_ids = _union(origins, "entry_ids")
-        patch_ids = _union(origins, "patch_ids")
-        result.append(
-            {
-                "id": task_id,
-                "kind": "logic",
-                "status": "planned",
-                "entry_ids": entry_ids,
-                "patch_ids": patch_ids,
-                "origin_task_ids": list(dict.fromkeys(origin_ids)),
-                "business_refs": refs,
-                "repair_unit_refs": [],
-                "paths": paths,
-                "priority": _priority(item.get("priority")),
-                "question": question,
-                "evidence": evidence[:MAX_EVIDENCE],
-            }
-        )
-        if task_id in existing_logic:
-            # A prior run owns this task's progress; do not reset it.
-            result.pop()
+        if record is not None:
+            result.append(record)
     return result
+
+
+def _logic_task_record(
+    item: Any,
+    label: str,
+    *,
+    evidence_index: EvidenceIndex,
+    task_by_id: Mapping[str, dict[str, Any]],
+    scope: set[str],
+    constraint_ids: set[str],
+    operation_ids: set[str],
+    investigation_ids: set[str],
+    evidence_by_ref: Mapping[str, list[dict[str, Any]]],
+    existing_questions: set[str],
+    existing_logic: Mapping[str, dict[str, Any]],
+    traces: list[dict[str, Any]],
+    seen_questions: set[str],
+    seen_ids: set[str],
+) -> dict[str, Any] | None:
+    item = _object(item, label)
+    origin_ids = _strings(item.get("origin_task_ids"), f"{label}.origin_task_ids")
+    if not origin_ids:
+        raise ReconModelError(f"{label}: origin_task_ids must not be empty")
+    origins: list[dict[str, Any]] = []
+    for origin_id in origin_ids:
+        origin = task_by_id.get(origin_id)
+        if origin is None:
+            raise ReconModelError(f"{label}: unknown origin task {origin_id}")
+        origins.append(origin)
+    question = _text(item.get("question"), f"{label}.question")
+    question_key = _question_key(question)
+    if (
+        question_key in existing_questions
+        or question_key in seen_questions
+        or _answered_by_trace(question_key, origin_ids, traces)
+    ):
+        return None
+    raw_refs = item.get("business_refs")
+    if raw_refs is not None and not isinstance(raw_refs, dict):
+        raise ReconModelError(f"{label}: business_refs must be an object")
+    refs = _known_refs(
+        raw_refs if isinstance(raw_refs, dict) else item,
+        constraint_ids=constraint_ids,
+        operation_ids=operation_ids,
+        investigation_ids=investigation_ids,
+        label=label,
+    )
+    if not any(refs.values()):
+        raise ReconModelError(f"{label}: business_refs must not be empty")
+    paths = _paths(item.get("paths"), scope, f"{label}.paths")
+    if not paths:
+        paths = [
+            str(path)
+            for origin in origins
+            for path in origin.get("paths", [])
+            if str(path) in scope
+        ]
+    paths = list(dict.fromkeys(paths))
+    if not paths:
+        raise ReconModelError(f"{label}: no in-scope paths for the follow-up task")
+    evidence = _evidence(item.get("evidence"), f"{label}.evidence", evidence_index)
+    if not evidence:
+        evidence = _ref_evidence(refs, evidence_by_ref)
+    task_id = _logic_id(origin_ids, question, refs, paths)
+    if task_id in seen_ids:
+        return None
+    seen_ids.add(task_id)
+    seen_questions.add(question_key)
+    if task_id in existing_logic:
+        # A prior run owns this task's progress; do not reset it.
+        return None
+    entry_ids = _union(origins, "entry_ids")
+    patch_ids = _union(origins, "patch_ids")
+    return {
+        "id": task_id,
+        "kind": "logic",
+        "status": "planned",
+        "entry_ids": entry_ids,
+        "patch_ids": patch_ids,
+        "origin_task_ids": list(dict.fromkeys(origin_ids)),
+        "business_refs": refs,
+        "repair_unit_refs": [],
+        "paths": paths,
+        "priority": _priority(item.get("priority")),
+        "question": question,
+        "evidence": evidence[:MAX_EVIDENCE],
+    }
 
 
 def _evidence(
     raw: Any,
     label: str,
     evidence_index: EvidenceIndex,
+    *,
+    gaps: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     if raw is None:
         return []
@@ -367,9 +482,13 @@ def _evidence(
         raise ReconModelError(f"{label}: evidence must be an array")
     if len(raw) > MAX_EVIDENCE:
         raise ReconModelError(f"{label}: evidence exceeds {MAX_EVIDENCE} items")
-    items, gaps = evidence_index.hydrate(raw, label)
-    if gaps:
-        raise ReconModelError(f"{label}: {gaps[0]}")
+    items, rejected = evidence_index.hydrate(raw, label)
+    if rejected:
+        if gaps is None:
+            raise ReconModelError(f"{label}: {rejected[0]}")
+        # Unusable items are dropped and reported; one bad citation must not
+        # discard the rest of the payload.
+        gaps.extend(rejected)
     return [
         {
             "path": item["path"],
@@ -390,7 +509,10 @@ def _historical(raw: Any, label: str) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for index, item in enumerate(raw[:20]):
         item = _object(item, f"{label}[{index}]")
-        source = _text(item.get("source"), f"{label}[{index}].source")
+        source = str(item.get("source", "") or "").strip()
+        if not source:
+            LOGGER.warning("%s[%d]: dropping historical reference without a source", label, index)
+            continue
         path = str(item.get("path", "") or "").strip()
         if path and safe_relative(path) is None:
             raise ReconModelError(f"{label}[{index}]: history path is unsafe")

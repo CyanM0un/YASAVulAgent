@@ -380,7 +380,7 @@ async def run_tool_loop_async(
             semaphore=model_semaphore,
             tool_calls=last_tool_calls,
         )
-    raise BudgetStop("step_budget")
+    raise BudgetStop("round_limit")
 
 
 async def _execute_tools_async(
@@ -434,9 +434,13 @@ async def _execute_tool_async(
 
 
 async def _invoke_model_async(model: Any, messages: list[Any]) -> Any:
-    if hasattr(model, "ainvoke"):
-        return await model.ainvoke(messages)
-    return await asyncio.to_thread(model.invoke, messages)
+    # LangChain caches one process-global async httpx client on first use and binds it
+    # to that event loop. Each stage runs in its own asyncio.run loop, so the second
+    # loop to call the model reuses a closed client and raises "Event loop is closed".
+    # The sync client carries no loop affinity, so prefer it.
+    if hasattr(model, "invoke"):
+        return await asyncio.to_thread(model.invoke, messages)
+    return await model.ainvoke(messages)
 
 
 async def _invoke_tool_async(tool: Any, arguments: dict[str, Any], deadline: float | None) -> Any:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,11 @@ def run_stage(
     running_state: RunState = {**state, **start_update}
     try:
         discover_state = _load_or_create(running_state, artifact_dir, state_file)
+        timeout = int(context.settings.discover_timeout)
+        if timeout > 0:
+            # Per-invocation deadline, like AUDIT_TIMEOUT: a resumed run gets a fresh window.
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout)
+            discover_state = {**discover_state, "discover_deadline": deadline.isoformat()}
         result = build_discover_graph().invoke(
             discover_state,
             context=context,

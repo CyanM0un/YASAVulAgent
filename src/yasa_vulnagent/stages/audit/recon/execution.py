@@ -136,7 +136,7 @@ class ReconExecution:
                 max_result_tokens=self.settings.agent_tool_result_tokens,
                 request_timeout=REQUEST_TIMEOUT_SECONDS,
                 parallel_tools=True,
-                finalize_on_exhaustion=False,
+                finalize_on_exhaustion=True,
                 tool_store=self.store,
                 model_semaphore=self.model_semaphore,
             )
