@@ -406,41 +406,84 @@ def summarize(state: DocumentsState, runtime: Runtime[RunContext]) -> dict[str, 
     unknowns = list(state.get("unknowns", []))
     warnings = list(state.get("warnings", []))
     token_counter = TokenCounter(settings.model, settings.agent_token_safety)
-    for batch in _token_batches(notes, int(settings.agent_context_tokens * 0.6), token_counter):
-        if _remaining(state) <= 0:
-            logger.warning("documents summary stopped at total time limit")
-            state = {**state, "stop_reason": "time_budget"}
-            break
-        try:
-            response = invoke_model(
-                model,
-                load_skill() + "\n\n" + load_prompt("summarize.md"),
-                _summary_prompt(batch),
-                deadline=state["deadline"],
-                budget=budget,
-                usage=context.usage,
-                settings=settings,
-                artifact_dir=artifact_dir,
-                stage="init.documents.summarize",
-                task_id="summary",
-            )
-            summary = parse_json_object(response, "documents summary")
-            summaries.append(summary)
-            unknowns.extend(_string_list(summary.get("unknowns")))
-            warnings.extend(_string_list(summary.get("warnings")))
-        except DocumentsFatalError:
-            raise
-        except (DocumentsError, TimeoutError, ValueError) as exc:
-            logger.warning("documents summary response was invalid reason=%s", exc)
-            state = {
-                **state,
-                "warnings": [*warnings, str(exc)],
-                "unknowns": unknowns,
-                "stop_reason": "time_budget" if isinstance(exc, TimeoutError) else "model_error",
-            }
-            warnings = list(state["warnings"])
-            if isinstance(exc, TimeoutError):
+    batch_token_limit = min(12_000, max(2_000, int(settings.agent_context_tokens * 0.35)))
+    batches = _token_batches(notes, batch_token_limit, token_counter)
+    system_prompt = load_skill() + "\n\n" + load_prompt("summarize.md")
+
+    def _summarize_batch(batch_index: int, batch: list[dict[str, Any]]) -> dict[str, Any]:
+        batch_budget = TaskBudget(
+            deadline=state["deadline"],
+            max_model_calls=max(
+                2,
+                settings.documents_summary_max_model_calls // max(1, len(batches)),
+            ),
+            max_rounds_per_invocation=settings.agent_max_rounds_per_invocation,
+            hard_task_cap=settings.agent_hard_task_cap,
+        )
+        response = invoke_model(
+            model,
+            system_prompt,
+            _summary_prompt(batch),
+            deadline=state["deadline"],
+            budget=batch_budget,
+            usage=context.usage,
+            settings=settings,
+            artifact_dir=artifact_dir,
+            stage="init.documents.summarize",
+            task_id=f"summary-{batch_index + 1}",
+        )
+        return parse_json_object(response, "documents summary")
+
+    if len(batches) <= 1:
+        for batch_index, batch in enumerate(batches):
+            if _remaining(state) <= 0:
+                logger.warning("documents summary stopped at total time limit")
+                state = {**state, "stop_reason": "time_budget"}
                 break
+            try:
+                summary = _summarize_batch(batch_index, batch)
+                summaries.append(summary)
+                unknowns.extend(_string_list(summary.get("unknowns")))
+                warnings.extend(_string_list(summary.get("warnings")))
+            except DocumentsFatalError:
+                raise
+            except (DocumentsError, TimeoutError, ValueError) as exc:
+                logger.warning("documents summary response was invalid reason=%s", exc)
+                state = {
+                    **state,
+                    "warnings": [*warnings, str(exc)],
+                    "unknowns": unknowns,
+                    "stop_reason": "time_budget" if isinstance(exc, TimeoutError) else "model_error",
+                }
+                warnings = list(state["warnings"])
+                if isinstance(exc, TimeoutError):
+                    break
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        max_workers = min(3, len(batches))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(_summarize_batch, batch_index, batch)
+                for batch_index, batch in enumerate(batches)
+            ]
+            for future in futures:
+                try:
+                    summary = future.result()
+                    summaries.append(summary)
+                    unknowns.extend(_string_list(summary.get("unknowns")))
+                    warnings.extend(_string_list(summary.get("warnings")))
+                except DocumentsFatalError:
+                    raise
+                except (DocumentsError, TimeoutError, ValueError) as exc:
+                    logger.warning("documents summary response was invalid reason=%s", exc)
+                    state = {
+                        **state,
+                        "warnings": [*warnings, str(exc)],
+                        "unknowns": unknowns,
+                        "stop_reason": "time_budget" if isinstance(exc, TimeoutError) else "model_error",
+                    }
+                    warnings = list(state["warnings"])
     overview: str | None = None
     if summaries:
         if len(summaries) == 1:

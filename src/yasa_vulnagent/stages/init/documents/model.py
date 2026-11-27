@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Iterable
@@ -25,12 +26,14 @@ class DocumentsFatalError(DocumentsError):
     """Raised when the documents model configuration cannot be used."""
 
 
+@lru_cache(maxsize=16)
 def load_prompt(name: str) -> str:
     return files("yasa_vulnagent.stages.init.documents").joinpath("prompts", name).read_text(
         encoding="utf-8"
     )
 
 
+@lru_cache(maxsize=4)
 def load_skill() -> str:
     return files("yasa_vulnagent.stages.init.documents").joinpath("SKILL.md").read_text(
         encoding="utf-8"
@@ -109,6 +112,7 @@ def invoke_model(
             json_expected=json_expected,
             json_repair_attempts=settings.agent_json_repair_attempts,
             max_result_tokens=settings.agent_tool_result_tokens,
+            request_timeout=settings.documents_model_timeout,
         )
     except BudgetStop as exc:
         if exc.reason == "time_budget":

@@ -245,11 +245,7 @@ class SourceToolbox:
     ) -> dict[str, Any]:
         file_path = self._safe_path(path)
         if file_path is None or not file_path.is_file():
-            return self._error(
-                "read_file",
-                path,
-                "file is unavailable; it is missing or outside this task's scope",
-            )
+            return self._read_file_unavailable(path)
         try:
             lines = self._lines(file_path)
         except OSError as exc:
@@ -506,19 +502,109 @@ class SourceToolbox:
         )
         return result
 
-    def _error(self, tool: str, target: str, message: str) -> dict[str, Any]:
-        self._record_error(tool, target, message)
-        return {"error": message, "tool": tool, "target": target}
+    def _read_file_unavailable(self, path: str) -> dict[str, Any]:
+        raw = str(path or "").strip()
+        dir_path = self._safe_path(raw, directory=True) if raw else None
+        if dir_path is not None and dir_path.is_dir():
+            rel = self._relative(dir_path)
+            return self._error(
+                "read_file",
+                path,
+                f"path is a directory, not a file; use list_directory('{rel}') instead",
+                error_kind="directory",
+            )
+        candidate = Path(raw) if raw else Path(".")
+        if candidate.is_absolute():
+            return self._error(
+                "read_file",
+                path,
+                "path must be relative to the repository root",
+                error_kind="invalid_path",
+            )
+        resolved = (self.repository / candidate).resolve()
+        if not self._under(self.repository, resolved):
+            return self._error(
+                "read_file",
+                path,
+                "path escapes the repository root",
+                error_kind="invalid_path",
+            )
+        if resolved.is_dir():
+            return self._error(
+                "read_file",
+                path,
+                "path is a directory outside this task's scope; use list_directory on an allowed directory",
+                error_kind="directory",
+            )
+        if resolved.is_file():
+            return self._error(
+                "read_file",
+                path,
+                "file exists in the repository but is outside this task's scope",
+                error_kind="out_of_scope",
+            )
+        suggestions = self._suggest_similar_paths(raw)
+        detail = "file does not exist in the repository; verify the path with list_directory or glob"
+        if suggestions:
+            detail += f"; similar allowed paths: {', '.join(suggestions)}"
+        return self._error("read_file", path, detail, error_kind="missing")
 
-    def _record_error(self, tool: str, target: str, message: str) -> None:
+    def _suggest_similar_paths(self, path: str, limit: int = 5) -> list[str]:
+        normalized = path.replace("\\", "/").removeprefix("./")
+        basename = Path(normalized).name.lower()
+        parent = str(Path(normalized).parent).replace("\\", "/")
+        if parent == ".":
+            parent = ""
+        exact_name: list[str] = []
+        same_parent: list[str] = []
+        scanned = 0
+        for allowed in self._iter_allowed_paths():
+            scanned += 1
+            if scanned > 2000:
+                break
+            if basename and Path(allowed).name.lower() == basename:
+                exact_name.append(allowed)
+                if len(exact_name) >= limit:
+                    break
+            elif parent and (allowed.startswith(parent + "/") or str(Path(allowed).parent) == parent):
+                if len(same_parent) < limit:
+                    same_parent.append(allowed)
+        return (exact_name + [item for item in same_parent if item not in exact_name])[:limit]
+
+    def _error(
+        self,
+        tool: str,
+        target: str,
+        message: str,
+        *,
+        error_kind: str = "error",
+    ) -> dict[str, Any]:
+        self._record_error(tool, target, message, error_kind=error_kind)
+        return {"error": message, "error_kind": error_kind, "tool": tool, "target": target}
+
+    def _record_error(
+        self,
+        tool: str,
+        target: str,
+        message: str,
+        *,
+        error_kind: str = "error",
+    ) -> None:
         logger.warning(
-            "discover screen tool error tool=%s target=%s fallback=source-or-unknown reason=%s",
+            "discover screen tool error tool=%s target=%s kind=%s fallback=source-or-unknown reason=%s",
             tool,
             target,
+            error_kind,
             message,
         )
         self.receipts.append(
-            {"tool": tool, "target": target, "status": "error", "error": message}
+            {
+                "tool": tool,
+                "target": target,
+                "status": "error",
+                "error_kind": error_kind,
+                "error": message,
+            }
         )
 
 
