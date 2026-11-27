@@ -6,7 +6,9 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+
+from langchain_core.tools import StructuredTool
 
 from ....agent.artifacts import ToolResultStore
 from ....agent.budget import BudgetStop, SharedBudgetAdapter
@@ -79,13 +81,30 @@ class ReconExecution:
             budget=self.task_budget,
         )
 
-    def tools(self) -> tuple[list[Any], list[dict[str, Any]]]:
+    def tools(
+        self, *, entries: Sequence[dict[str, Any]] = ()
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
         source = self.source_toolbox()
         source.receipts = self.tool_receipts
         tools = [
             tool for tool in source.langchain_tools()
             if getattr(tool, "name", "") != "save_note"
         ]
+        entries_by_id = {str(entry["id"]): entry for entry in entries if entry.get("id")}
+        if entries_by_id:
+            def read_entry_details(entry_id: str) -> dict[str, Any]:
+                entry = entries_by_id.get(entry_id)
+                if entry is None:
+                    return {"error": f"unknown entry ID: {entry_id}"}
+                return {"entry": entry}
+
+            tools.append(
+                StructuredTool.from_function(
+                    func=read_entry_details,
+                    name="read_entry_details",
+                    description="Read one prepared audit entry by ID, including its saved discovery evidence.",
+                )
+            )
         yasa = self.yasa_toolbox()
         if yasa is not None:
             yasa.receipts = self.tool_receipts
@@ -209,7 +228,7 @@ async def run_recon_stage(
                 max(1, int(context.settings.audit_model_concurrency))
             ),
         )
-        tools, _ = execution.tools()
+        tools, _ = execution.tools(entries=inputs.entries)
         payload = await execution.run_json_agent(
             system_prompt=load_prompt(),
             user_prompt=json.dumps(inputs.seed(), ensure_ascii=False, indent=2),

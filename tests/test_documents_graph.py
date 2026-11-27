@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import unittest
@@ -55,6 +56,9 @@ class DocumentsGraphTest(unittest.TestCase):
             repository.mkdir()
             (repository / "README.md").write_text("# Project\nDocumented behavior.\n", encoding="utf-8")
             (repository / "application.yaml").write_text("server:\n  port: 8080\n", encoding="utf-8")
+            runtime_dir = repository / ".yasa" / "yasamcp"
+            runtime_dir.mkdir(parents=True)
+            (runtime_dir / "fingerprint_cache.json").write_text("{}", encoding="utf-8")
             artifact_dir = root / "run" / "stages" / "init" / "documents"
             settings = Settings(
                 api_key="test-key",
@@ -80,7 +84,11 @@ class DocumentsGraphTest(unittest.TestCase):
 
             self.assertEqual(result["documents"]["status"], "complete")
             self.assertEqual(result["documents"]["document_count"], 2)
-            self.assertTrue((artifact_dir / "inventory.json").is_file())
+            inventory = json.loads((artifact_dir / "inventory.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                {document["reference"] for document in inventory["documents"]},
+                {"README.md", "application.yaml"},
+            )
             self.assertTrue((artifact_dir / "overview.md").is_file())
             self.assertTrue(list((artifact_dir / "notes").glob("*.json")))
             self.assertTrue(list((artifact_dir / "sources").glob("*.txt")))

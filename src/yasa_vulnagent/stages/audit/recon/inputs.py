@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from ..storage import AuditPaths, load_json, read_business_logic
 from .constants import (
+    MAX_ENTRY_SUMMARY_CHARS,
     MAX_OVERVIEW_CHARS,
     MAX_SUMMARY_VIEWS,
     MAX_TRACE_VIEWS,
@@ -31,10 +32,13 @@ class ReconInputs:
     limitations: list[str]
 
     def seed(self) -> dict[str, Any]:
+        scope = dict(self.scope)
+        files = scope.pop("files", [])
+        scope["file_count"] = len(files) if isinstance(files, list) else 0
         return {
-            "scope": self.scope,
+            "scope": scope,
             "overview": self.overview,
-            "entries": _compact_objects(self.entries, 30),
+            "entries": [_entry_view(entry) for entry in self.entries[:30]],
             "patches": _compact_objects(self.patches, 30),
             "tasks": [_task_view(task) for task in self.tasks[:60]],
             "traces": [_trace_view(trace) for trace in self.traces[:MAX_TRACE_VIEWS]],
@@ -124,6 +128,24 @@ def _objects(value: Any) -> list[dict[str, Any]]:
 
 def _compact_objects(values: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     return [dict(item) for item in values[:limit]]
+
+
+def _entry_view(entry: Mapping[str, Any]) -> dict[str, Any]:
+    discovery = entry.get("discovery")
+    discovery = discovery if isinstance(discovery, dict) else {}
+    location = entry.get("entry_location")
+    location = location if isinstance(location, dict) else {}
+    return {
+        "id": entry.get("id", ""),
+        "name": entry.get("name", ""),
+        "role": discovery.get("role") or entry.get("role") or "unknown",
+        "entry_location": {
+            key: location[key] for key in ("path", "start_line", "end_line") if key in location
+        },
+        "summary": str(discovery.get("summary") or entry.get("summary") or "")[
+            :MAX_ENTRY_SUMMARY_CHARS
+        ],
+    }
 
 
 def _task_view(task: Mapping[str, Any]) -> dict[str, Any]:

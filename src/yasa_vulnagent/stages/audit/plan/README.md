@@ -66,14 +66,17 @@ The model must return one JSON object:
 }
 ```
 
-Validation rejects unknown or repeated IDs, missing IDs, cross-batch IDs, mixed
-entry/patch groups, groups larger than four, groups without a common path,
-blocked tasks in a merged group, invalid priorities, missing reasons, and an
-incomplete `order` permutation. A failure raises `PlanModelError` before any
-task is written. There is no semantic fallback and no repair call. Transient
-429/5xx model failures are retried with `RetryPolicy` and `AGENT_MODEL_RETRIES`;
-400/401/403 failures are fatal and are not retried. Provider-level retries stay
-disabled to avoid double retries.
+The planner restores an omitted `task-entry-` prefix when the full ID matches
+a seed in the current batch. Unknown IDs (including cross-batch references)
+and duplicates are logged at `ERROR`. An affected batch uses one normal-priority
+group per original seed and continues without another model call.
+
+Responses that proceed to validation must cover all seeds and obey the rules for
+group size, kind, shared paths, blocked tasks, priority, reason, and order. A
+validation failure raises `PlanModelError` before any task is written. Transient
+429/5xx model failures are retried with `RetryPolicy` and `AGENT_MODEL_RETRIES`.
+400/401/403 failures are fatal. Provider-level retries stay disabled to avoid
+double retries.
 
 When seed tasks exist, the model is mandatory. Missing `LLM_API_KEY` or model
 configuration raises `PlanConfigurationError`. An existing plan is reused

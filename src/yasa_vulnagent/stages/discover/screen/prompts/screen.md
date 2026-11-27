@@ -12,7 +12,9 @@ Completion requires actually reading the requested scope and stating whether the
 
 If tool output is truncated or MCP is unavailable, report unknown/deferred and let follow-up tasks continue. When the time or model-call budget is exhausted, return the JSON object immediately with `scope_status: "partial"` and put what remains into `unknowns` and `deferred`.
 
-When you find a reusable mechanism such as an annotation, wrapper, registration helper, or call pattern, include it in `feature_observations`. Every observation must point to source you actually read; its definition range must be covered by a non-truncated `read_file` receipt from the same task. The runtime will validate the evidence and may query all production-candidate files automatically; you do not need to enumerate every usage in the answer. An empty `query.scope` means all production text; a non-empty scope must contain allowed production paths, and an all-invalid scope is dropped rather than widened.
+Emit `feature_observations` only when another match of the pattern would identify a plausible external input entry or a registration point that binds external input to a specific handler. Record standalone configuration gates, authorization checks, and validators as evidence for the associated entry. If there is no qualifying pattern, return `feature_observations: []`.
+
+Every observation must point to source you actually read. Its definition range must be covered by a non-truncated `read_file` receipt from the same task. The runtime validates the evidence and may query all production-candidate files automatically. You do not need to enumerate every usage in the answer. An empty `query.scope` means all production text. A non-empty scope must contain allowed production paths. The runtime drops a scope whose paths are all invalid.
 
 Feature observation shape:
 {

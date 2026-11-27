@@ -11,6 +11,11 @@ Use the supplied trace results. Recon is cross-entry, cross-patch, and
 cross-operation work.
 
 Rules:
+- Start from the entry locations and task paths in the seed. Use
+  `list_directory`, `glob`, or `search_text` to locate other in-scope files and
+  `read_file` to inspect the relevant lines.
+- Entry summaries are an index. When you need the saved discovery details,
+  call `read_entry_details` with an entry ID from the summaries, scope, or tasks.
 - Read current source with the provided tools before making a source claim.
 - Current-source evidence needs a path, line range, and explanation. The tool
   re-reads the file and stores the code.

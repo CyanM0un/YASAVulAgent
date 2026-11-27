@@ -20,6 +20,7 @@ from langchain_core.tools import StructuredTool
 _EXCLUDED_DIRS = {
     ".git",
     ".tools",
+    ".yasa",
     ".yasa-vulnagent",
     ".venv",
     "__pycache__",
@@ -589,7 +590,7 @@ class DocumentToolbox:
         if candidate.is_absolute() or ".." in candidate.parts:
             return None
         resolved = (self.repository / candidate).resolve()
-        if resolved != self.repository and self.repository not in resolved.parents:
+        if self._ignored(resolved):
             return None
         return resolved
 

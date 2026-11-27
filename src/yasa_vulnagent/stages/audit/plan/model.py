@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from importlib.resources import files
 from typing import Any
 
@@ -12,6 +13,7 @@ from ....workflow.state import RunContext
 PLAN_MODEL_TIMEOUT_SECONDS = 120
 MAX_SEED_TASKS_PER_GROUP = 4
 _PRIORITIES = {"high", "normal", "low"}
+logger = logging.getLogger(__name__)
 
 
 class PlanConfigurationError(RuntimeError):
@@ -98,8 +100,54 @@ def run_batch(
             retries=max(0, attempts - 1),
         )
     payload = _parse_json_object(content, str(batch["id"]))
+    if _normalize_seed_references(payload, batch["id"], seed_tasks):
+        payload = {
+            "groups": [
+                {
+                    "seed_task_ids": [str(task["id"])],
+                    "priority": "normal",
+                    "reason": "Model returned invalid seed references for this batch.",
+                }
+                for task in seed_tasks
+            ],
+            "order": list(range(len(seed_tasks))),
+        }
     validate_batch_output(payload, batch, seed_tasks)
     return payload
+
+
+def _normalize_seed_references(
+    payload: dict[str, Any], batch_id: str, seed_tasks: list[dict[str, Any]]
+) -> bool:
+    """Restore known prefixes and report whether the batch needs a fallback."""
+    groups = payload.get("groups")
+    if not isinstance(groups, list):
+        return False
+    known_ids = {str(task["id"]) for task in seed_tasks}
+    seen: set[str] = set()
+    has_invalid_references = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        seed_ids = group.get("seed_task_ids")
+        if not isinstance(seed_ids, list):
+            continue
+        for index, seed_id in enumerate(seed_ids):
+            if not isinstance(seed_id, str) or not seed_id:
+                continue
+            if seed_id.startswith("entry-") and seed_id not in known_ids:
+                full_id = f"task-entry-{seed_id}"
+                if full_id in known_ids:
+                    seed_id = seed_ids[index] = full_id
+            if seed_id not in known_ids:
+                logger.error("%s: unknown seed task %r", batch_id, seed_id)
+                has_invalid_references = True
+            elif seed_id in seen:
+                logger.error("%s: duplicate seed task %r", batch_id, seed_id)
+                has_invalid_references = True
+            else:
+                seen.add(seed_id)
+    return has_invalid_references
 
 
 def validate_batch_output(

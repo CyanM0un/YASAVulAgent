@@ -9,6 +9,26 @@ from yasa_vulnagent.stages.init.documents.tools import DocumentToolbox
 
 
 class DocumentsToolsTest(unittest.TestCase):
+    def test_yasa_runtime_files_are_excluded_from_discovery_and_direct_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "repository"
+            runtime_path = ".yasa/yasamcp/fingerprint_cache.json"
+            runtime_file = repository / runtime_path
+            runtime_file.parent.mkdir(parents=True)
+            runtime_file.write_text('{"marker": "needle"}', encoding="utf-8")
+            (repository / "README.md").write_text("needle\n", encoding="utf-8")
+            toolbox = DocumentToolbox(repository, root / "artifacts")
+
+            self.assertEqual(toolbox.seed_candidates(), ["README.md"])
+            self.assertEqual(
+                toolbox.list_directory()["entries"], [{"name": "README.md", "kind": "file"}]
+            )
+            self.assertEqual(toolbox.glob("**/*.json")["matches"], [])
+            self.assertEqual(toolbox.search_text("needle")["returned"], 1)
+            self.assertIn("error", toolbox.search_text("needle", path=runtime_path))
+            self.assertIn("error", toolbox.read_file(runtime_path))
+
     def test_read_file_rejects_oversized_and_binary_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary) / "repository"

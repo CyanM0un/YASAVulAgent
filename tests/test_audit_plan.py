@@ -252,6 +252,73 @@ class AuditPlanTest(unittest.TestCase):
             )
             self.assertEqual(result["tasks"][0]["priority"], "high")
 
+    def test_plan_restores_missing_entry_seed_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state, paths = self._prepared(
+                Path(temporary), entries=[_entry("entry-1"), _entry("entry-2")], mode="entries"
+            )
+
+            def responder(payload: dict) -> dict:
+                result = _singletons(payload)
+                seed_id = result["groups"][0]["seed_task_ids"][0]
+                result["groups"][0]["seed_task_ids"][0] = seed_id.removeprefix("task-entry-")
+                return result
+
+            model = FakeModel(responder)
+            result = plan(state, self._context(model))
+
+            self.assertEqual(model.calls, 1)
+            self.assertEqual(
+                {task["id"] for task in result["tasks"]},
+                {seed["id"] for seed in model.payloads[0]["seed_tasks"]},
+            )
+            self.assertEqual(load_json(paths.audit_file)["tasks"], result["tasks"])
+
+    def test_plan_logs_unknown_or_duplicate_seeds_and_continues(self) -> None:
+        for issue in ("unknown", "within_group", "across_groups"):
+            with self.subTest(issue=issue), tempfile.TemporaryDirectory() as temporary:
+                state, paths = self._prepared(
+                    Path(temporary),
+                    entries=[_entry("entry-1"), _entry("entry-2"), _entry("entry-3")],
+                    mode="entries",
+                )
+
+                def responder(payload: dict) -> dict:
+                    result = _singletons(payload)
+                    first, *rest = result["groups"]
+                    first["priority"] = "high"
+                    if payload["batch_id"] != "batch-0001":
+                        return result
+                    ids = first["seed_task_ids"]
+                    shortened_id = ids[0].removeprefix("task-entry-")
+                    if issue == "within_group":
+                        ids.append(shortened_id)
+                    elif issue == "across_groups":
+                        rest[0]["seed_task_ids"][0] = shortened_id
+                    else:
+                        ids[0] = "entry-unknown"
+                    return result
+
+                model = FakeModel(responder)
+                with self.assertLogs(
+                    "yasa_vulnagent.stages.audit.plan.model", level="ERROR"
+                ) as logs:
+                    result = plan(state, self._context(model, batch_size=2))
+
+                expected_error = "unknown seed task" if issue == "unknown" else "duplicate seed task"
+                self.assertIn(f"batch-0001: {expected_error}", logs.output[0])
+                self.assertEqual(model.calls, 2)
+                self.assertEqual(len(result["tasks"]), 3)
+                self.assertEqual(
+                    {task["id"]: task["priority"] for task in result["tasks"]},
+                    {
+                        seed["id"]: priority
+                        for payload, priority in zip(model.payloads, ["normal", "high"], strict=True)
+                        for seed in payload["seed_tasks"]
+                    },
+                )
+                self.assertEqual(load_json(paths.audit_file)["tasks"], result["tasks"])
+
     def test_plan_uses_one_model_call_per_batch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state, _ = self._prepared(
@@ -307,16 +374,16 @@ class AuditPlanTest(unittest.TestCase):
                 lambda payload: {
                     "groups": [
                         {
-                            "seed_task_ids": ["task-unknown"],
+                            "seed_task_ids": [payload["seed_tasks"][0]["id"]],
                             "priority": "normal",
-                            "reason": "unknown",
+                            "reason": "",
                         }
                     ],
                     "order": [0],
                 }
             )
 
-            with self.assertRaises(PlanModelError):
+            with self.assertRaisesRegex(PlanModelError, "has no reason"):
                 plan(state, self._context(model))
 
             self.assertEqual(load_json(paths.audit_file)["tasks"], [])

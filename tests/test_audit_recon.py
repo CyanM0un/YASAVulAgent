@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from langchain_core.messages import AIMessage, ToolMessage
+
 from yasa_vulnagent.agent.runtime import run_coroutine
 from yasa_vulnagent.agent.usage import UsageRecorder
 from yasa_vulnagent.config import Settings
@@ -205,6 +207,66 @@ def _payload(*, evidence_path: str = SOURCE, outcome: str = "unknown") -> dict:
 
 
 class ReconTest(unittest.TestCase):
+    def test_recon_reads_entry_details_and_scoped_source_on_demand(self) -> None:
+        class _OnDemandModel(_Model):
+            async def ainvoke(self, messages):
+                if self.calls == 0:
+                    self.calls += 1
+                    self.seed = json.loads(messages[1].content)
+                    return AIMessage(
+                        content="",
+                        tool_calls=[
+                            {"name": "read_entry_details", "args": {"entry_id": "entry-1"}, "id": "detail"},
+                            {"name": "read_entry_details", "args": {"entry_id": "unknown"}, "id": "unknown"},
+                            {"name": "read_file", "args": {"path": "src/other.py"}, "id": "allowed"},
+                            {"name": "read_file", "args": {"path": "src/outside.py"}, "id": "outside"},
+                        ],
+                    )
+                self.results = {
+                    message.tool_call_id: json.loads(message.content)
+                    for message in messages
+                    if isinstance(message, ToolMessage)
+                }
+                return await super().ainvoke(messages)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state, paths, repository = _state(Path(temporary), tasks=[_task()])
+            (repository / "src" / "other.py").write_text("setting = 1\n", encoding="utf-8")
+            (repository / "src" / "outside.py").write_text("setting = 2\n", encoding="utf-8")
+            state["scope"]["files"].append("src/other.py")
+            entry = state["entries"][0]
+            entry["entry_location"]["code"] = TEXT
+            entry["discovery"] = {"role": "source", "summary": "s" * 500}
+            audit = json.loads(paths.audit_file.read_text(encoding="utf-8"))
+            write_json(paths.audit_file, {**audit, "scope": state["scope"], "entries": state["entries"]})
+            model = _OnDemandModel(_payload())
+
+            with patch("yasa_vulnagent.stages.audit.recon.execution.open_yasa_mcp", _no_mcp):
+                result = run_coroutine(run_recon_stage(state, _context(model)))
+
+            self.assertEqual(model.calls, 2)
+            self.assertEqual(model.seed["scope"]["file_count"], 2)
+            self.assertNotIn("files", model.seed["scope"])
+            self.assertNotIn("src/other.py", json.dumps(model.seed))
+            self.assertEqual(
+                model.seed["entries"],
+                [{
+                    "id": "entry-1",
+                    "name": "export",
+                    "role": "source",
+                    "entry_location": {"path": SOURCE, "start_line": 1, "end_line": 3},
+                    "summary": "s" * 240,
+                }],
+            )
+            self.assertEqual(model.results["detail"], {"entry": entry})
+            self.assertIn("error", model.results["unknown"])
+            self.assertIn("setting = 1", model.results["allowed"]["text"])
+            self.assertIn("error", model.results["outside"])
+            self.assertEqual(result["next_action"], "trace")
+            persisted = json.loads(paths.audit_file.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["scope"]["files"], [SOURCE, "src/other.py"])
+            self.assertEqual(persisted["entries"], [entry])
+
     def test_valid_output_writes_sidecar_and_logic_task(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state, paths, _repository = _state(Path(temporary), tasks=[_task()])

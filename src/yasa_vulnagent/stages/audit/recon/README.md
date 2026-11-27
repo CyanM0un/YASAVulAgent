@@ -10,6 +10,10 @@ follow-up questions from the prepared audit inputs and the first trace pass.
 - `prepare.inputs.overview_file` when available.
 - Existing `business-logic.json`, reused only when it is complete and valid.
 
+The model seed carries a file count and short entry summaries with source
+locations. The full file inventory defines the source tools' allowed paths.
+Use `read_entry_details` to fetch a prepared entry's full discovery record by ID.
+
 ## Outputs
 
 `business-logic.json` is canonical:
