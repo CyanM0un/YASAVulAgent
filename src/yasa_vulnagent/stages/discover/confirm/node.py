@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ _FIELDS = ("input_origin", "registration", "activation", "input_binding", "trust
 _ROLES = {"source", "registration", "activation", "binding", "boundary", "unknown"}
 
 
+@lru_cache(maxsize=4)
 def _load_prompt() -> str:
     return files("yasa_vulnagent.stages.discover.confirm").joinpath("prompt.md").read_text(
         encoding="utf-8"

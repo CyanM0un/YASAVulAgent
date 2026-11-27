@@ -223,10 +223,7 @@ def _query_id(mechanism_id: str, spec: dict[str, Any]) -> str:
 
 
 def _existing_hit(ledger: DiscoverLedger, hit_id: str) -> dict[str, Any] | None:
-    for hit in ledger.hit_rows():
-        if str(hit.get("hit_id", "")) == hit_id:
-            return hit
-    return None
+    return ledger.get_hit(hit_id)
 
 
 def _materialize_results(
@@ -436,10 +433,7 @@ def process_observations(
         summary["mechanisms"] += 1
         summary["mechanism_ids"].append(str(mechanism["mechanism_id"]))
         query_id = _query_id(mechanism["mechanism_id"], _query_spec(observation))
-        query = next(
-            (item for item in ledger.query_rows() if item.get("query_id") == query_id),
-            None,
-        )
+        query = ledger.get_query(query_id)
         if query is None:
             query = {
                 "query_id": query_id,

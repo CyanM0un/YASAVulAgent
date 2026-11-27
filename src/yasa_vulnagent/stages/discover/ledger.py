@@ -679,6 +679,12 @@ class DiscoverLedger:
         )
         self.connection.commit()
 
+    def get_query(self, query_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT payload FROM feature_queries WHERE query_id = ?", (str(query_id),)
+        ).fetchone()
+        return self._json_value(row["payload"], {}) if row is not None else None
+
     def query_rows(self) -> list[dict[str, Any]]:
         return [
             self._json_value(row["payload"], {})
@@ -718,6 +724,12 @@ class DiscoverLedger:
             ),
         )
         self.connection.commit()
+
+    def get_hit(self, hit_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM feature_hits WHERE hit_id = ?", (str(hit_id),)
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def hit_rows(self) -> list[dict[str, Any]]:
         return [

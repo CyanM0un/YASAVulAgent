@@ -13,12 +13,20 @@ class TokenCounter:
         self.safety = max(1.0, float(safety))
         self._encoding: Any | None = None
         self._encoding_failed = False
+        self._text_cache: dict[str, int] = {}
 
     def count_text(self, text: str) -> int:
         if not text:
             return 0
+        cached = self._text_cache.get(text)
+        if cached is not None:
+            return cached
         raw = self._raw_count(text)
-        return max(1, math.ceil(raw * self.safety))
+        counted = max(1, math.ceil(raw * self.safety))
+        if len(self._text_cache) >= 4096:
+            self._text_cache.clear()
+        self._text_cache[text] = counted
+        return counted
 
     def count_json(self, value: Any) -> int:
         return self.count_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")))

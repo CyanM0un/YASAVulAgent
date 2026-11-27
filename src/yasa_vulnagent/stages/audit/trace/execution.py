@@ -93,8 +93,9 @@ class TraceExecution:
         )
 
     def tools_for(self, spec: SpecialistSpec) -> tuple[list[Any], list[dict[str, Any]]]:
+        receipts: list[dict[str, Any]] = []
         source = self.source_toolbox()
-        source.receipts = self.tool_receipts
+        source.receipts = receipts
         tools = [
             tool for tool in source.langchain_tools()
             if getattr(tool, "name", "") != "save_note"
@@ -102,32 +103,33 @@ class TraceExecution:
         if spec.tools in {"source_yasa", "source_yasa_git"}:
             yasa = self.yasa_toolbox()
             if yasa is not None:
-                yasa.receipts = self.tool_receipts
+                yasa.receipts = receipts
                 tools.extend(yasa.langchain_tools())
         if spec.tools == "source_yasa_git" and _commit_id(self.revision):
             from ...init.security_history.git_tools import GitToolbox
 
             git = GitToolbox(self.repository, captured_head=self.revision)
             tools.extend(git.langchain_tools())
-        return tools, self.tool_receipts
+        return tools, receipts
 
     def tools_for_task(self, task: Mapping[str, Any]) -> tuple[list[Any], list[dict[str, Any]]]:
+        receipts: list[dict[str, Any]] = []
         source = self.source_toolbox()
-        source.receipts = self.tool_receipts
+        source.receipts = receipts
         tools = [
             tool for tool in source.langchain_tools()
             if getattr(tool, "name", "") != "save_note"
         ]
         yasa = self.yasa_toolbox()
         if yasa is not None:
-            yasa.receipts = self.tool_receipts
+            yasa.receipts = receipts
             tools.extend(yasa.langchain_tools())
         if str(task.get("kind", "")) == "patch" and _commit_id(self.revision):
             from ...init.security_history.git_tools import GitToolbox
 
             git = GitToolbox(self.repository, captured_head=self.revision)
             tools.extend(git.langchain_tools())
-        return tools, self.tool_receipts
+        return tools, receipts
 
     async def run_json_agent(
         self,

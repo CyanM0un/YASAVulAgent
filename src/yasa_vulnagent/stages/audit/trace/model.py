@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import json
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from ....agent.model import (
+    build_chat_model,
+    model_name,
+    parse_json_object as _parse_json_object,
+)
 from ....config import Settings
 from ....workflow.state import RunContext
 from .constants import MODEL_TIMEOUT_SECONDS
@@ -24,6 +29,7 @@ class TraceModelError(TraceError):
     """Raised when a trace model call cannot produce usable output."""
 
 
+@lru_cache(maxsize=64)
 def load_prompt(name: str) -> str:
     root = files("yasa_vulnagent.stages.audit.trace")
     candidate = root.joinpath(name)
@@ -36,52 +42,16 @@ def load_prompt(name: str) -> str:
 
 
 def build_model(context: RunContext) -> Any:
-    if context.model is not None:
-        return context.model
-    settings = context.settings
-    if not settings.api_key:
-        raise TraceConfigurationError("LLM_API_KEY is required for the audit trace stage")
-    try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as exc:
-        raise TraceConfigurationError(
-            "langchain-openai is required for the audit trace stage"
-        ) from exc
-    return ChatOpenAI(
-        model=settings.model,
-        api_key=settings.api_key,
-        base_url=settings.base_url,
+    return build_chat_model(
+        context,
+        stage_label="audit trace",
         timeout=MODEL_TIMEOUT_SECONDS,
-        max_retries=0,
+        error_cls=TraceConfigurationError,
     )
 
 
-def model_name(model: Any) -> str:
-    return str(getattr(model, "model_name", "") or getattr(model, "model", "") or "")
-
-
 def parse_json_object(content: str, label: str) -> dict[str, Any]:
-    text = content.strip()
-    if not text:
-        raise TraceModelError(f"{label}: model returned empty content")
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines:
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise TraceModelError(f"{label}: model did not return a JSON object")
-    try:
-        value = json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise TraceModelError(f"{label}: invalid JSON: {exc}") from exc
-    if not isinstance(value, dict):
-        raise TraceModelError(f"{label}: model output must be an object")
-    return value
+    return _parse_json_object(content, label, error_cls=TraceModelError)
 
 
 def prompt_path(name: str) -> Path:

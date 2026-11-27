@@ -54,7 +54,8 @@ def run_stage(
     try:
         index = InitIndex(init_dir / "index.sqlite")
         try:
-            index.rebuild_documents(init_dir / "documents" / "notes")
+            if not index.has_notes():
+                index.rebuild_documents(init_dir / "documents" / "notes")
             index.rebuild_history(init_dir / "security_history")
         finally:
             index.close()

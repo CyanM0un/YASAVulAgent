@@ -131,6 +131,11 @@ class InitIndex:
     def search_units(self, query: str, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
         return self._search("units_fts", "commit_sha, unit_id, kind, summary", 4, query, limit, offset)
 
+    def has_notes(self) -> bool:
+        with self._lock:
+            row = self._connection.execute("SELECT 1 FROM notes_fts LIMIT 1").fetchone()
+            return row is not None
+
     def rebuild_documents(self, notes_dir: Path) -> None:
         for path in sorted(notes_dir.glob("*.json")) if notes_dir.is_dir() else []:
             try:

@@ -200,19 +200,32 @@ def _string_leaves(value: Any, parent: Any = None, key: Any = None) -> list[tupl
 
 
 def _shrink_strings(value: Any, limit: int) -> Any:
-    for _ in range(256):
-        if len(_dumps(value)) <= limit:
+    for _ in range(32):
+        current_len = len(_dumps(value))
+        if current_len <= limit:
             break
         leaves = _string_leaves(value)
-        if not leaves:
+        shrinkable = [item for item in leaves if len(item[2]) > 80]
+        if not shrinkable:
             break
-        parent, key, text = max(leaves, key=lambda item: len(item[2]))
-        if len(text) <= 80:
+        excess = current_len - limit
+        shrinkable.sort(key=lambda item: len(item[2]), reverse=True)
+        total_reducible = sum(len(item[2]) - 80 for item in shrinkable)
+        if total_reducible <= 0:
             break
-        keep = max(80, len(text) // 2)
-        head = keep // 2
-        tail = keep - head
-        parent[key] = text[:head] + "\n[...truncated...]\n" + text[-tail:]
+        ratio = min(1.0, (excess * 1.1) / total_reducible)
+        changed = False
+        for parent, key, text in shrinkable:
+            reducible = len(text) - 80
+            cut = max(1, int(reducible * ratio))
+            keep = max(80, len(text) - cut)
+            if keep < len(text):
+                head = keep // 2
+                tail = keep - head
+                parent[key] = text[:head] + "\n[...truncated...]\n" + text[-tail:]
+                changed = True
+        if not changed:
+            break
     return value
 
 

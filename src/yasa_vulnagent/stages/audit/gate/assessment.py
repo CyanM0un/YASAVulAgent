@@ -47,11 +47,18 @@ def assess(inputs: VerifyInputs, framework: Mapping[str, Any]) -> dict[str, Any]
         )
 
     _check_input_coverage(inputs, tasks, debts)
+    category_by_task: dict[str, list[dict[str, Any]]] = {}
+    for check in category_checks:
+        category_by_task.setdefault(str(check.get("task_id", "")), []).append(check)
+    mechanism_by_task: dict[str, list[dict[str, Any]]] = {}
+    for check in mechanism_checks:
+        mechanism_by_task.setdefault(str(check.get("task_id", "")), []).append(check)
     for task in tasks:
+        task_id = str(task.get("id", ""))
         _check_task(
             task,
-            category_checks,
-            mechanism_checks,
+            category_by_task.get(task_id, []),
+            mechanism_by_task.get(task_id, []),
             trace_by_task,
             inputs,
             entry_categories,
