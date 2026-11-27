@@ -60,7 +60,11 @@ def run(
         "unknowns": [],
         "document_index": 0,
     }
-    result = build_documents_graph().invoke(document_state, context=context)
+    result = build_documents_graph().invoke(
+        document_state,
+        config={"recursion_limit": 1000},
+        context=context,
+    )
     if context.usage is not None:
         context.usage.write(artifact_dir / "usage.json", "init.documents")
     index_path = artifact_dir.parent / "index.sqlite"

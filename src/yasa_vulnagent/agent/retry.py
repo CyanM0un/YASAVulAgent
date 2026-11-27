@@ -78,7 +78,8 @@ class RetryPolicy:
                     raise
                 if deadline is not None and time.monotonic() >= deadline:
                     raise
-                time.sleep(min(0.2, max(0.0, (deadline or 0) - time.monotonic())))
+                delay = 0.2 if deadline is None else min(0.2, max(0.0, deadline - time.monotonic()))
+                time.sleep(delay)
         assert last is not None
         raise last
 
@@ -123,7 +124,8 @@ class RetryPolicy:
                     raise
                 if deadline is not None and time.monotonic() >= deadline:
                     raise
-                await asyncio.sleep(min(0.2, max(0.0, (deadline or 0) - time.monotonic())))
+                delay = 0.2 if deadline is None else min(0.2, max(0.0, deadline - time.monotonic()))
+                await asyncio.sleep(delay)
         assert last is not None
         raise last
 

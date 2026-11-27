@@ -92,10 +92,10 @@ class ShellRunner:
             (r"/var/run/docker\.sock", "docker socket"),
             (r"--security-opt[^\n]*seccomp[^\n]*unconfined", "unconfined seccomp"),
             (r"--security-opt[^\n]*apparmor[^\n]*unconfined", "unconfined apparmor"),
-            (r"(?:^|[;&|]\s*)sudo\b", "sudo"),
-            (r"(?:^|[;&|]\s*)nsenter\b", "namespace enter"),
-            (r"(?:^|[;&|]\s*)pivot_root\b", "pivot_root"),
-            (r"(?:^|[;&|]\s*)mount\b", "host mount"),
+            (r"(?:^|[\s;|&`($(/])sudo\b", "sudo"),
+            (r"(?:^|[\s;|&`($(/])nsenter\b", "namespace enter"),
+            (r"(?:^|[\s;|&`($(/])pivot_root\b", "pivot_root"),
+            (r"(?:^|[\s;|&`($(/])mount\b", "host mount"),
         )
         for pattern, reason in rules:
             if re.search(pattern, lowered):

@@ -73,21 +73,23 @@ def freshly_read(
     for item in evidence:
         by_path.setdefault(str(item.get("path", "")), []).append(item)
     for path, items in by_path.items():
-        covered = False
+        all_covered = True
         for item in items:
             start = _int(item.get("start_line"))
             end = _int(item.get("end_line"))
+            item_covered = False
             for receipt in reads:
                 if str(receipt.get("path", "")) != path:
                     continue
                 r_start = _int(receipt.get("start_line"))
                 r_end = _int(receipt.get("end_line"))
                 if r_start <= start and r_end >= end:
-                    covered = True
+                    item_covered = True
                     break
-            if covered:
+            if not item_covered:
+                all_covered = False
                 break
-        if not covered:
+        if not all_covered:
             missing.append(path)
     return not missing, missing
 

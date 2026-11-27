@@ -299,24 +299,27 @@ async def run_tool_loop_async(
                 rounds=counters["rounds"],
                 model_calls=int(getattr(budget, "model_calls", 0)),
             )
-        if round_index >= max_rounds and finalize_on_exhaustion:
-            return await _finish_async(
-                model=model,
-                messages=messages,
-                budget=budget,
-                usage=usage,
-                stage=stage,
-                task_id=task_id,
-                counter=counter,
-                context=context,
-                request_timeout=request_timeout,
-                reason="round_limit",
-                counters=counters,
-                receipts=receipts,
-                calls=call_records,
-                last_text=last_text,
-                semaphore=model_semaphore,
-            )
+        if round_index >= max_rounds:
+            if finalize_on_exhaustion:
+                return await _finish_async(
+                    model=model,
+                    messages=messages,
+                    budget=budget,
+                    usage=usage,
+                    stage=stage,
+                    task_id=task_id,
+                    counter=counter,
+                    context=context,
+                    request_timeout=request_timeout,
+                    reason="round_limit",
+                    counters=counters,
+                    receipts=receipts,
+                    calls=call_records,
+                    last_text=last_text,
+                    semaphore=model_semaphore,
+                    tool_calls=last_tool_calls,
+                )
+            raise BudgetStop("round_limit")
         try:
             results = await _execute_tools_async(
                 calls, tool_list, budget=budget, retry=retry, parallel_tools=parallel_tools
@@ -399,8 +402,7 @@ async def _execute_tools_async(
         and len(calls) > 1
         and all(name in _PARALLEL_TOOL_NAMES for name in names)
     )
-    for _ in calls:
-        budget.consume_tool_round()
+    budget.consume_tool_round()
     if parallel:
         return list(
             await asyncio.gather(

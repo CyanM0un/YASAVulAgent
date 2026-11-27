@@ -185,7 +185,7 @@ def _apply_contract(result: dict[str, Any], paths: ValidationPaths, raw: Mapping
     if not _artifact_evidence(result["verifier"], paths):
         failures.append("fresh verifier is missing its own saved evidence")
     verifier_disposition = str(result["verifier"].get("disposition", ""))
-    if verifier_disposition and verifier_disposition != disposition:
+    if verifier_disposition != disposition:
         failures.append("fresh verifier disagreed with the primary disposition")
     if not _environment_ok(result["verifier"].get("environment")):
         failures.append("fresh verifier is missing environment")
@@ -212,12 +212,15 @@ def _verifier(value: dict[str, Any] | None, paths: ValidationPaths) -> dict[str,
     result = dict(value)
     nested = result.get("verifier")
     if isinstance(nested, dict):
-        result.update(nested)
+        for key, item in nested.items():
+            if key in {"evidence", "artifacts"} and not item and result.get(key):
+                continue
+            result[key] = item
     result["independent"] = bool(result.get("independent", False))
     evidence = result.get("evidence") if isinstance(result.get("evidence"), list) else []
     result["rerun"] = bool(
         result.get("execution_status") == "completed"
-        and result.get("reproduction")
+        and (result.get("reproduction") or result.get("execution"))
         and _artifact_evidence({"evidence": evidence, "artifacts": result.get("artifacts", [])}, paths)
     )
     result.setdefault("environment", {})

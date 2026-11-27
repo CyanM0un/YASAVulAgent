@@ -59,7 +59,7 @@ def select_findings(
     else:
         selected = list(findings)
     omitted = max(0, len(selected) - limit) if limit > 0 else 0
-    return selected[:limit], omitted
+    return (selected[:limit] if limit > 0 else selected), omitted
 
 
 def load_audit(validation: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:

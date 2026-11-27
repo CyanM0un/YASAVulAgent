@@ -36,6 +36,8 @@ class TaskBudget:
 
     def consume_tool_round(self) -> None:
         self.check()
+        if self.tool_rounds >= self.max_rounds_per_invocation:
+            raise BudgetStop("round_limit")
         self.tool_rounds += 1
 
     def remaining_seconds(self) -> float | None:
@@ -48,6 +50,8 @@ class TaskBudget:
             return "time_budget"
         if self.model_calls >= min(self.max_model_calls, self.hard_task_cap):
             return "step_budget"
+        if self.tool_rounds >= self.max_rounds_per_invocation:
+            return "round_limit"
         return ""
 
     def snapshot(self) -> dict[str, int | str | None]:

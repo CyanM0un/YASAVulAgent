@@ -235,8 +235,8 @@ def _check_run(
         errors.append(_issue("buildkit_insecure", "RUN requests an insecure BuildKit sandbox"))
     if "--mount=type=secret" in lowered or "--mount=type=ssh" in lowered:
         errors.append(_issue("buildkit_secret", "RUN requests a BuildKit secret or SSH mount"))
-    if "--mount=type=bind" in lowered and (
-        "source=/" in lowered or "source=.." in lowered
+    if "--mount=type=bind" in lowered and any(
+        token in lowered for token in ("source=/", "source=..", "src=/", "src=..")
     ):
         errors.append(_issue("buildkit_host_bind", "RUN binds a host path into the build"))
     if "sudo " in lowered or lowered.startswith("sudo"):

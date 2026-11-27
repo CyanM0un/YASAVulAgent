@@ -417,13 +417,26 @@ class DocumentToolbox:
                         "truncated": False,
                     },
                 )
-            selected = blocks[start - 1 : max(start, finish)]
-            text = "\n\n".join(
-                f"[Block {start + offset}]\n{content}" for offset, content in enumerate(selected)
-            )
-            text = text[: self.chunk_chars]
+            rendered_parts: list[str] = []
+            total_chars = 0
+            actual_end = start - 1
+            truncated = False
+            for idx in range(start, finish + 1):
+                block_text = f"[Block {idx}]\n{blocks[idx - 1]}"
+                sep = 2 if rendered_parts else 0
+                if rendered_parts and total_chars + sep + len(block_text) > self.chunk_chars:
+                    truncated = True
+                    break
+                if not rendered_parts and len(block_text) > self.chunk_chars:
+                    rendered_parts.append(block_text[: self.chunk_chars])
+                    actual_end = idx
+                    truncated = True
+                    break
+                rendered_parts.append(block_text)
+                total_chars += sep + len(block_text)
+                actual_end = idx
+            text = "\n\n".join(rendered_parts)
             self._register_text_urls("\n\n".join(blocks))
-            actual_end = start + len(selected) - 1 if selected else start - 1
             return self._source_payload(
                 text,
                 {
@@ -432,7 +445,7 @@ class DocumentToolbox:
                     "end_block": actual_end,
                     "next_block": actual_end + 1 if actual_end < len(blocks) else None,
                     "total_blocks": len(blocks),
-                    "truncated": actual_end < finish or len("\n\n".join(selected)) > len(text),
+                    "truncated": truncated or actual_end < finish,
                 },
             )
         except Exception as exc:

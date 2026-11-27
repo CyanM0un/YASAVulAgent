@@ -92,19 +92,22 @@ def create_build_context(
     excluded: list[str] = []
     for source in _iter_source_files(repository, destination, excluded):
         relative = source.relative_to(repository).as_posix()
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copy2(source, target)
-            size = target.stat().st_size
+            size = source.stat().st_size
         except OSError as exc:
-            raise BuildContextError(f"cannot copy {relative}: {exc}") from exc
+            raise BuildContextError(f"cannot stat {relative}: {exc}") from exc
         files += 1
         total_bytes += size
         if files > settings.validate_env_max_context_files:
             raise BuildContextError("build context file limit exceeded")
         if total_bytes > settings.validate_env_max_context_bytes:
             raise BuildContextError("build context byte limit exceeded")
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(source, target)
+        except OSError as exc:
+            raise BuildContextError(f"cannot copy {relative}: {exc}") from exc
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         with target.open("rb") as handle:

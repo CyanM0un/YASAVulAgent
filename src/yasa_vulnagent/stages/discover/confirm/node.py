@@ -23,7 +23,7 @@ from ..features import (
     ensure_confirm_tasks_for_candidates,
     process_observations,
 )
-from ..ledger import DiscoverLedger
+from ..ledger import DiscoverLedger, _entry_id
 from ..schema import DiscoverState
 from ..storage import persist, write_json
 from ..screen.graph import ScreenBudget
@@ -354,33 +354,73 @@ def _apply_task_result(
     errors: list[str] = []
     warnings: list[str] = []
     by_id = {str(item.get("entry_id", "")): item for item in results}
-    for entry_id in candidate_ids:
-        result = by_id.get(entry_id)
-        if result is None:
-            if str(entries.get(entry_id, {}).get("status", "candidate")) != "candidate":
-                # Already resolved by an earlier attempt; resubmitting is not required.
+    if not candidate_ids and str(task.get("origin", "")) == "same_file":
+        scope_paths = set(ledger.task_scope_paths(str(task.get("task_id", ""))))
+        for index, result in enumerate(results):
+            location = result.get("location") if isinstance(result.get("location"), dict) else {}
+            path = str(location.get("path", "")).removeprefix("./")
+            if scope_paths and path and path not in scope_paths:
+                warnings.append(f"same_file entry outside task scope: {path}")
                 continue
-            errors.append(f"missing entry result for {entry_id}")
-            continue
-        normalized, entry_errors, entry_warnings = _normalize_entry_result(
-            repository,
-            ledger,
-            result=result,
-            entry=entries[entry_id],
-            same_file_reviewed=same_file_reviewed,
-        )
-        warnings.extend(entry_warnings)
-        if normalized is None:
-            errors.extend(f"{entry_id}: {error}" for error in entry_errors)
-            continue
-        updates = dict(normalized)
-        updates.pop("entry_id", None)
-        updates.pop("status", None)
-        ledger.update_entry(entry_id, status=str(normalized["status"]), updates=updates)
-        applied.append(normalized)
-    extra = len(results) - len(candidate_ids)
-    if extra > 0:
-        warnings.append(f"{extra} entry result(s) were outside the task candidate scope")
+            entry_id = str(result.get("entry_id", "")).strip()
+            if not entry_id:
+                seed = {
+                    "path": path,
+                    "line_start": location.get("line_start", 0),
+                    "line_end": location.get("line_end", 0),
+                    "kind": result.get("role", f"same_file_{index}"),
+                }
+                entry_id = _entry_id(seed)
+                result = {**result, "entry_id": entry_id}
+            existing = ledger.get_entry(entry_id) or {
+                "entry_id": entry_id,
+                "role": str(result.get("role", "unknown")),
+                "location": dict(location),
+            }
+            normalized, entry_errors, entry_warnings = _normalize_entry_result(
+                repository,
+                ledger,
+                result=result,
+                entry=existing,
+                same_file_reviewed=same_file_reviewed,
+            )
+            warnings.extend(entry_warnings)
+            if normalized is None:
+                errors.extend(f"{entry_id}: {error}" for error in entry_errors)
+                continue
+            updates = dict(normalized)
+            updates.pop("entry_id", None)
+            updates.pop("status", None)
+            ledger.update_entry(entry_id, status=str(normalized["status"]), updates=updates)
+            applied.append(normalized)
+    else:
+        for entry_id in candidate_ids:
+            result = by_id.get(entry_id)
+            if result is None:
+                if str(entries.get(entry_id, {}).get("status", "candidate")) != "candidate":
+                    # Already resolved by an earlier attempt; resubmitting is not required.
+                    continue
+                errors.append(f"missing entry result for {entry_id}")
+                continue
+            normalized, entry_errors, entry_warnings = _normalize_entry_result(
+                repository,
+                ledger,
+                result=result,
+                entry=entries[entry_id],
+                same_file_reviewed=same_file_reviewed,
+            )
+            warnings.extend(entry_warnings)
+            if normalized is None:
+                errors.extend(f"{entry_id}: {error}" for error in entry_errors)
+                continue
+            updates = dict(normalized)
+            updates.pop("entry_id", None)
+            updates.pop("status", None)
+            ledger.update_entry(entry_id, status=str(normalized["status"]), updates=updates)
+            applied.append(normalized)
+        extra = len(results) - len(candidate_ids)
+        if extra > 0:
+            warnings.append(f"{extra} entry result(s) were outside the task candidate scope")
     task["entry_results"] = applied
     task["same_file_reviewed"] = same_file_reviewed
     task["feature_observations"] = [
@@ -388,7 +428,12 @@ def _apply_task_result(
     ]
     task["unknowns"] = [*task.get("unknowns", []), *errors]
     task["warnings"] = warnings
-    applied_ids = {str(item.get("entry_id")) for item in applied}
+    resolved_ids = {
+        entry_id
+        for entry_id in candidate_ids
+        if str(entries.get(entry_id, {}).get("status", "candidate")) != "candidate"
+    }
+    applied_ids = {str(item.get("entry_id")) for item in applied} | resolved_ids
     terminal = all(entry_id in applied_ids for entry_id in candidate_ids)
     confirmed_ok = all(
         bool(item.get("same_file_reviewed", False))

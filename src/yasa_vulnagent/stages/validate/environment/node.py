@@ -71,9 +71,26 @@ def run_environment(run_file: Path, *, rebuild: bool = False) -> RunState:
                 "image": {},
                 "environment_hash": "",
                 "context_hash": "",
+                "visits": {},
+                "executed_nodes": [],
                 "stop_reason": "",
                 "errors": [],
                 "warnings": [],
+                "gaps": [],
+            }
+        )
+    elif state.get("status") in {"failed", "blocked"}:
+        state.update(
+            {
+                "plan_revision": 0,
+                "plan_calls": 0,
+                "gate_rejections": 0,
+                "attempt": 0,
+                "diagnose_calls": 0,
+                "visits": {},
+                "executed_nodes": [],
+                "stop_reason": "",
+                "errors": [],
                 "gaps": [],
             }
         )

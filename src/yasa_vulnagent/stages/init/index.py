@@ -42,9 +42,16 @@ class InitIndex:
             )
             self._connection.commit()
 
-    def upsert_note(self, note: dict[str, Any], source: str = "") -> None:
-        note_id = str(note.get("document_id") or "")
-        if not note_id:
+    def upsert_note(
+        self,
+        note: dict[str, Any],
+        source: str = "",
+        *,
+        note_id: str | None = None,
+    ) -> None:
+        doc_id = str(note.get("document_id") or "")
+        key = str(note_id or doc_id)
+        if not key:
             return
         text = " ".join(
             [
@@ -54,10 +61,10 @@ class InitIndex:
             ]
         )
         with self._lock:
-            self._connection.execute("DELETE FROM notes_fts WHERE note_id = ?", (note_id,))
+            self._connection.execute("DELETE FROM notes_fts WHERE note_id = ?", (key,))
             self._connection.execute(
                 "INSERT INTO notes_fts (note_id, document_id, path, text) VALUES (?, ?, ?, ?)",
-                (note_id, note_id, source or str(note.get("source", "")), text),
+                (key, doc_id or key, source or str(note.get("source", "")), text),
             )
             self._connection.commit()
 
@@ -65,14 +72,31 @@ class InitIndex:
         sha = str(review.get("commit") or "")
         if not sha:
             return
+        rationale = str(review.get("rationale", "")).strip()
+        signals = review.get("security_signals")
+        signal_text = " ".join(str(item) for item in signals if item) if isinstance(signals, list) else ""
+        message_parts = [
+            str(review.get("reason", review.get("message", ""))).strip(),
+            rationale,
+            signal_text,
+        ]
+        message = " ".join(part for part in message_parts if part)
+        if changed_paths is None:
+            locations = review.get("locations")
+            if isinstance(locations, list):
+                changed_paths = [
+                    str(loc.get("path", "")).strip()
+                    for loc in locations
+                    if isinstance(loc, dict) and str(loc.get("path", "")).strip()
+                ]
         with self._lock:
             self._connection.execute("DELETE FROM commits_fts WHERE sha = ?", (sha,))
             self._connection.execute(
                 "INSERT INTO commits_fts (sha, subject, message, changed_paths) VALUES (?, ?, ?, ?)",
                 (
                     sha,
-                    str(review.get("subject") or sha),
-                    str(review.get("reason", review.get("message", ""))),
+                    str(review.get("subject") or rationale or sha),
+                    message,
                     " ".join(changed_paths or []),
                 ),
             )
@@ -113,7 +137,7 @@ class InitIndex:
                 note = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            self.upsert_note(note)
+            self.upsert_note(note, note_id=path.stem)
 
     def rebuild_history(self, history_dir: Path) -> None:
         reviews_dir = history_dir / "reviews"
