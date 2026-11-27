@@ -201,13 +201,10 @@ async def run_tool_loop_async(
             raise
         compaction_delta = 0
         if context.should_compact(messages):
-            messages = context.compact(messages)
+            hint = compaction_hint() if compaction_hint is not None else None
+            messages = context.compact(messages, hint=hint)
             counters["compactions"] += 1
             compaction_delta = 1
-            if compaction_hint is not None:
-                hint = compaction_hint()
-                if hint:
-                    messages.append(SystemMessage(content=hint))
         estimated = counter.count_messages(messages)
         before = budget.model_calls
         call_started = time.monotonic()

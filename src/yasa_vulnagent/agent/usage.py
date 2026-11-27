@@ -44,14 +44,15 @@ class UsageRecorder:
         max_tokens: int | None = None,
         max_cost: float | None = None,
     ) -> None:
-        if max_tokens is not None:
-            if int(max_tokens) < 0:
-                raise ValueError("max_tokens must be non-negative")
-            self._max_tokens = int(max_tokens)
-        if max_cost is not None:
-            if float(max_cost) < 0:
-                raise ValueError("max_cost must be non-negative")
-            self._max_cost = float(max_cost)
+        with self._lock:
+            if max_tokens is not None:
+                if int(max_tokens) < 0:
+                    raise ValueError("max_tokens must be non-negative")
+                self._max_tokens = int(max_tokens)
+            if max_cost is not None:
+                if float(max_cost) < 0:
+                    raise ValueError("max_cost must be non-negative")
+                self._max_cost = float(max_cost)
 
     def exceeded(self) -> str:
         """Return the first exhausted soft limit, or an empty string."""
@@ -116,26 +117,27 @@ class UsageRecorder:
     def snapshot(self, stage: str | None = None) -> dict[str, Any]:
         with self._lock:
             records = [dict(item) for item in self._records if stage is None or item["stage"] == stage]
-        return _summarize(records, limits=self._limits(), exceeded=self.exceeded())
+            limits = self._limits()
+            exceeded = self._exceeded_locked()
+        return _summarize(records, limits=limits, exceeded=exceeded)
 
     def write(self, path: Path, stage_prefix: str | None = None) -> None:
+        from .artifacts import atomic_write_json
+
         with self._lock:
             records = [
                 dict(item)
                 for item in self._records
                 if stage_prefix is None or str(item["stage"]).startswith(stage_prefix)
             ]
+            limits = self._limits()
+            exceeded = self._exceeded_locked()
         payload = _summarize(
             records,
-            limits=self._limits(),
-            exceeded=self.exceeded(),
+            limits=limits,
+            exceeded=exceeded,
         )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        temporary.replace(path)
+        atomic_write_json(path, payload)
 
     def _limits(self) -> dict[str, Any]:
         return {

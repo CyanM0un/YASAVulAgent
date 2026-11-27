@@ -71,7 +71,7 @@ def run_discover(run_file: Path) -> RunState:
         )
         session.progress.finish(
             "workflow.discover_resume",
-            status=str(update.get("status", "complete")),
+            status=str(update.get("discover", {}).get("status", "partial")),
         )
         return {**state, **update}
     except Exception as error:

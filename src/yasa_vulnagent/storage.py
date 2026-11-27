@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
+from .agent.artifacts import atomic_write_json
 from .config import Settings
 from .workflow.state import STAGE_NAMES, RunState, StageRecord
 
@@ -57,23 +58,11 @@ def create_run(
 
 
 def save_state(state: RunState) -> None:
-    destination = Path(state["run_file"])
-    temporary = destination.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(destination)
+    atomic_write_json(Path(state["run_file"]), state, sort_keys=True)
 
 
 def save_stage_record(record: StageRecord) -> None:
-    destination = Path(record["artifact_file"])
-    temporary = destination.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(destination)
+    atomic_write_json(Path(record["artifact_file"]), record, sort_keys=True)
 
 
 def load_state(path: Path) -> RunState:

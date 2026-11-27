@@ -30,6 +30,7 @@ class TraceTaskState(TypedDict, total=False):
     outcome: dict[str, Any]
     status: str
     error: str
+    artifact_dir: str
 
 
 async def run_trace_task(
@@ -38,8 +39,11 @@ async def run_trace_task(
     paths: Any = None,
 ) -> dict[str, Any]:
     graph = build_trace_task_graph()
+    initial: TraceTaskState = {"task": task, "triage_round": 0}
+    if paths is not None and hasattr(paths, "root"):
+        initial["artifact_dir"] = str(paths.root)
     result = await graph.ainvoke(
-        {"task": task, "triage_round": 0},
+        initial,
         context=_context(execution),
     )
     return dict(result.get("outcome") or {})
@@ -186,6 +190,18 @@ async def _validate_persist(
     lead = dict(state.get("lead_result") or {})
     triage = dict(state.get("triage") or {})
     error = str(state.get("error", ""))
+    if not lead and str(state.get("status", "")) == "deferred":
+        return {
+            "outcome": {
+                "task_id": str(task.get("id", "")),
+                "status": "deferred",
+                "category_checks": [],
+                "mechanism_checks": [],
+                "trace": {},
+                "summaries": [],
+                "gaps": [error] if error else ["audit budget exhausted"],
+            }
+        }
     if not lead:
         lead = {
             "id": _trace_id(execution.run_id, str(task.get("id", ""))),
@@ -230,7 +246,7 @@ async def _validate_persist(
     lead["status"] = status
     artifact_file = f"traces/{lead['id']}.json"
     artifact = write_trace_artifact(
-        _paths(execution),
+        _paths(execution, state),
         {
             **lead,
             "task": task,
@@ -316,10 +332,11 @@ def _execution(runtime: Runtime[RunContext]) -> TraceExecution:
     return execution
 
 
-def _paths(execution: TraceExecution) -> Any:
-    from ..storage import audit_paths
+def _paths(execution: TraceExecution, state: TraceTaskState | None = None) -> Any:
+    from ..storage import paths_from_state
 
-    return audit_paths(execution.audit_dir.parent)
+    artifact_dir = str((state or {}).get("artifact_dir") or execution.audit_dir)
+    return paths_from_state({"artifact_dir": artifact_dir})
 
 
 def _trace_id(run_id: str, task_id: str) -> str:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,7 @@ class ToolResultStore:
         digest = hashlib.sha256(encoded).hexdigest()[:24]
         path = self.root / f"{digest}.json"
         if not path.exists():
-            path.write_bytes(encoded + b"\n")
+            atomic_write_bytes(path, encoded + b"\n")
         return f"tool-results/{digest}.json"
 
     def read(self, reference: str, offset: int = 0, limit: int = 4000) -> dict[str, Any]:
@@ -89,8 +91,24 @@ def _take(text: str, budget: int, counter: TokenCounter, *, from_end: bool) -> s
     return text[-low:] if from_end else text[:low]
 
 
-def atomic_write_json(path: Path, payload: Any) -> None:
+def atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_json(path: Path, payload: Any, *, sort_keys: bool = False) -> None:
+    encoded = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=sort_keys) + "\n").encode(
+        "utf-8"
+    )
+    atomic_write_bytes(path, encoded)

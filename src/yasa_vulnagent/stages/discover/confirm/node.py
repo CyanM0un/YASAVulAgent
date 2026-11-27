@@ -143,10 +143,15 @@ def _task_context(
             "Keep broad cross-file work in screen_scope."
         ),
     }
-    if int(task.get("attempts", 0)) > 1:
+    if int(task.get("attempts", 0)) >= 1:
         context["attempts"] = int(task.get("attempts", 0))
-        if task.get("error"):
-            context["last_error"] = str(task["error"])[:1000]
+        error_text = str(task.get("error") or "").strip()
+        if not error_text:
+            unknowns = [str(item).strip() for item in task.get("unknowns", []) if str(item).strip()]
+            if unknowns:
+                error_text = "; ".join(unknowns[-5:])
+        if error_text:
+            context["last_error"] = error_text[:1000]
     prior = ledger.prior_context_for_task(str(task.get("task_id", "")), limit=10)
     if prior:
         context["prior_findings"] = {

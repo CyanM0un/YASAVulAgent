@@ -52,6 +52,16 @@ class ProgressReporter:
         with self._lock:
             stack = self._steps.get(thread_id, [])
             frame = next((item for item in reversed(stack) if item["step"] == step), None)
+            if frame is None:
+                candidates = [
+                    item
+                    for tid, other_stack in self._steps.items()
+                    if tid != thread_id
+                    for item in other_stack
+                    if item["step"] == step
+                ]
+                if candidates:
+                    frame = max(candidates, key=lambda item: float(item["started_at"]))
             if frame is not None:
                 frame["last_activity"] = now
         self.logger.info(
@@ -65,16 +75,31 @@ class ProgressReporter:
         now = self._clock()
         thread_id = threading.get_ident()
         with self._lock:
+            owner_tid = thread_id
             stack = self._steps.get(thread_id, [])
             index = next(
-                (index for index in range(len(stack) - 1, -1, -1) if stack[index]["step"] == step),
+                (idx for idx in range(len(stack) - 1, -1, -1) if stack[idx]["step"] == step),
                 None,
             )
+            if index is None:
+                best: tuple[float, int, int] | None = None
+                for tid, other_stack in self._steps.items():
+                    if tid == thread_id:
+                        continue
+                    for idx in range(len(other_stack) - 1, -1, -1):
+                        if other_stack[idx]["step"] == step:
+                            started = float(other_stack[idx]["started_at"])
+                            if best is None or started >= best[0]:
+                                best = (started, tid, idx)
+                            break
+                if best is not None:
+                    _, owner_tid, index = best
+                    stack = self._steps[owner_tid]
             started_at = stack[index]["started_at"] if index is not None else None
             if index is not None:
                 stack.pop(index)
             if not stack:
-                self._steps.pop(thread_id, None)
+                self._steps.pop(owner_tid, None)
         elapsed = ""
         if started_at is not None:
             elapsed = f" elapsed_seconds={max(0.0, now - started_at):.3f}"

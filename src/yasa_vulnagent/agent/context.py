@@ -26,10 +26,13 @@ class ContextManager:
     def should_compact(self, messages: list[Any]) -> bool:
         return self.counter.count_messages(messages) > int(self.max_tokens * self.trigger)
 
-    def compact(self, messages: list[Any]) -> list[Any]:
-        from langchain_core.messages import HumanMessage, SystemMessage
+    def compact(self, messages: list[Any], *, hint: str | None = None) -> list[Any]:
+        from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+        from .artifacts import truncate_text
 
         if len(messages) <= 2:
+            if hint and hint.strip():
+                return [*messages, SystemMessage(content=hint.strip())]
             return messages
         head = [messages[0]]
         if isinstance(messages[1], HumanMessage):
@@ -37,43 +40,75 @@ class ContextManager:
         carried: list[str] = []
         index = len(head)
         while index < len(messages) and isinstance(messages[index], SystemMessage):
-            carried.append(str(messages[index].content))
+            text_part = str(messages[index].content).strip()
+            if text_part and text_part not in carried:
+                carried.append(text_part)
             index += 1
+        if hint and hint.strip():
+            hint_text = hint.strip()
+            if hint_text not in carried:
+                carried.append(hint_text)
         exchanges = _tool_exchanges(messages)
         if not exchanges:
-            return _keep_recent(messages, self.keep_recent_results * 2 + 2)
-        keep = exchanges[-self.keep_recent_results :]
-        drop = exchanges[: -self.keep_recent_results]
-        receipts = [
-            receipt for exchange in drop for receipt in _exchange_receipts(exchange)
-        ]
-        receipts = list(dict.fromkeys(receipts))[-24:]
-        digest: list[str] = []
-        for exchange in drop:
-            for message in exchange:
-                text = _assistant_text(message)
-                if text:
-                    digest.append(_short(" ".join(text.split()), 300))
-        digest = list(dict.fromkeys(digest))[-12:]
-        compacted = list(head)
-        if receipts or digest:
-            lines = [
-                *carried,
-                f"{len(drop)} earlier tool exchanges were compacted; "
-                "full results are in tool-results/.",
+            kept = _keep_recent(messages, self.keep_recent_results * 2 + 2)
+            if hint and hint.strip():
+                kept.insert(len(head), SystemMessage(content=hint.strip()))
+            return kept
+
+        def _build(keep_count: int) -> list[Any]:
+            keep = exchanges[-keep_count:] if keep_count > 0 else []
+            drop = exchanges[:-keep_count] if keep_count > 0 else exchanges
+            receipts = [
+                receipt for exchange in drop for receipt in _exchange_receipts(exchange)
             ]
-            if digest:
-                lines.append("Earlier reasoning:")
-                lines.extend(f"- {item}" for item in digest)
-            if receipts:
-                lines.append("Earlier tool receipts:")
-                lines.extend(receipts)
-            text = "\n".join(lines)
-            compacted.append(SystemMessage(content=text[: self.max_tokens * 2]))
-        elif carried:
-            compacted.append(SystemMessage(content="\n".join(carried)[: self.max_tokens * 2]))
-        for exchange in keep:
-            compacted.extend(exchange)
+            receipts = list(dict.fromkeys(receipts))[-24:]
+            digest: list[str] = []
+            for exchange in drop:
+                for message in exchange:
+                    text = _assistant_text(message)
+                    if text:
+                        digest.append(_short(" ".join(text.split()), 300))
+            digest = list(dict.fromkeys(digest))[-12:]
+            compacted = list(head)
+            if receipts or digest:
+                lines = [
+                    *carried,
+                    f"{len(drop)} earlier tool exchanges were compacted; "
+                    "full results are in tool-results/.",
+                ]
+                if digest:
+                    lines.append("Earlier reasoning:")
+                    lines.extend(f"- {item}" for item in digest)
+                if receipts:
+                    lines.append("Earlier tool receipts:")
+                    lines.extend(receipts)
+                text = "\n".join(lines)
+                compacted.append(SystemMessage(content=text[: self.max_tokens * 2]))
+            elif carried:
+                compacted.append(SystemMessage(content="\n".join(carried)[: self.max_tokens * 2]))
+            for exchange in keep:
+                compacted.extend(exchange)
+            return compacted
+
+        compacted = _build(self.keep_recent_results)
+        if self.should_compact(compacted) and len(exchanges) > 1:
+            compacted = _build(1)
+        if self.should_compact(compacted):
+            target = max(128, int(self.max_tokens * self.trigger) // 2)
+            trimmed: list[Any] = []
+            for message in compacted:
+                if isinstance(message, ToolMessage) and isinstance(message.content, str):
+                    clipped, did_clip = truncate_text(message.content, self.counter, max(64, target // 2))
+                    if did_clip:
+                        trimmed.append(
+                            ToolMessage(
+                                content=clipped,
+                                tool_call_id=message.tool_call_id,
+                            )
+                        )
+                        continue
+                trimmed.append(message)
+            compacted = trimmed
         assert_valid_pairing(compacted)
         return compacted
 

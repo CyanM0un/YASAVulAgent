@@ -108,8 +108,10 @@ class SourceToolbox:
         directory = self._safe_path(path, directory=True)
         if directory is None or not directory.is_dir():
             return self._error("list_directory", path, "directory is unavailable")
+        limit = max(1, min(int(max_entries), 200))
         entries: list[dict[str, str]] = []
-        for item in sorted(directory.iterdir(), key=lambda value: value.name.lower()):
+        has_more = False
+        for item in sorted(directory.iterdir(), key=lambda value: self._relative(value)):
             if self._ignored(item):
                 continue
             relative = self._relative(item)
@@ -119,16 +121,13 @@ class SourceToolbox:
                 continue
             if cursor and relative <= cursor:
                 continue
+            if len(entries) >= limit:
+                has_more = True
+                break
             entries.append(
                 {"name": item.name, "kind": "directory" if item.is_dir() else "file"}
             )
-            if len(entries) >= max(1, min(int(max_entries), 200)):
-                break
-        next_cursor = (
-            self._relative(directory / entries[-1]["name"])
-            if len(entries) >= max(1, min(int(max_entries), 200))
-            else None
-        )
+        next_cursor = self._relative(directory / entries[-1]["name"]) if has_more and entries else None
         result = {"path": self._relative(directory), "entries": entries, "next_cursor": next_cursor}
         return self._record("list_directory", path, result)
 
@@ -282,10 +281,25 @@ class SourceToolbox:
             return result
         requested_end = total_lines if end_line is None else max(start, min(int(end_line), total_lines))
         selected = lines[start - 1 : requested_end]
-        text, truncated_by_chars = _bounded("\n".join(selected), self.max_output_chars)
-        actual_end = start + text.count("\n")
-        if text and not truncated_by_chars and actual_end < requested_end:
-            actual_end = requested_end
+        kept: list[str] = []
+        used = 0
+        truncated_by_chars = False
+        partial_line = False
+        for line in selected:
+            sep = 1 if kept else 0
+            if kept and used + sep + len(line) > self.max_output_chars:
+                truncated_by_chars = True
+                break
+            if not kept and len(line) > self.max_output_chars:
+                clipped, _ = _bounded(line, self.max_output_chars)
+                kept.append(clipped)
+                truncated_by_chars = True
+                partial_line = True
+                break
+            kept.append(line)
+            used += sep + len(line)
+        text = "\n".join(kept)
+        actual_end = start + len(kept) - 1 if kept else start - 1
         truncated = truncated_by_chars or actual_end < requested_end
         result = {
             "path": self._relative(file_path),
@@ -296,6 +310,8 @@ class SourceToolbox:
             "total_lines": total_lines,
             "truncated": truncated,
         }
+        if partial_line:
+            result["partial_line"] = True
         receipt = {
             "tool": "read_file",
             "path": self._relative(file_path),
