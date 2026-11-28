@@ -135,7 +135,7 @@ def plan(state: dict[str, Any], runtime: Any = None) -> dict[str, object]:
         "framework": framework,
         "status": "running",
         "stop_reason": stop_reason,
-        "next_action": "trace",
+        "next_action": "recon",
     }
     write_plan_checkpoint(updated)
     return _result(updated)
@@ -150,7 +150,7 @@ def _result(state: dict[str, Any]) -> dict[str, object]:
         "framework": state["framework"],
         "status": "running",
         "stop_reason": state.get("stop_reason", ""),
-        "next_action": "trace",
+        "next_action": "recon",
     }
 
 
@@ -209,7 +209,7 @@ def _existing_result(
         "framework": framework,
         "status": "running",
         "stop_reason": summary["stop_reason"],
-        "next_action": "trace",
+        "next_action": "recon",
     }
 
 

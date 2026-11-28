@@ -6,7 +6,9 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
+
+from langchain_core.tools import StructuredTool
 
 from ....agent.artifacts import ToolResultStore
 from ....agent.budget import SharedBudgetAdapter
@@ -20,6 +22,7 @@ from ...discover.screen.mcp import open_yasa_mcp
 from ...discover.screen.tools import ReadCache, SourceToolbox
 from ..budget import AuditBudget, AuditTaskBudget
 from ..categories import CategoryManifest, load_category_manifest
+from ..framework import MAX_NODE_VISITS
 from ..prepare.inventory import current_revision
 from ..storage import (
     AuditPaths,
@@ -129,7 +132,63 @@ class TraceExecution:
 
             git = GitToolbox(self.repository, captured_head=self.revision)
             tools.extend(git.langchain_tools())
+        if self.category_details:
+            tools.append(self._category_details_tool(receipts))
         return tools, receipts
+
+    def _category_details_tool(self, receipts: list[dict[str, Any]]) -> StructuredTool:
+        details_map = self._raw_category_details()
+        titles = {category.id: category.title for category in self.manifest.categories}
+
+        def get_category_details(
+            categories: list[str] | None = None,
+            category: str = "",
+        ) -> dict[str, Any]:
+            requested: list[str] = []
+            if isinstance(category, str) and category.strip():
+                requested.append(category.strip())
+            if isinstance(categories, list):
+                for item in categories:
+                    value = str(item or "").strip()
+                    if value and value not in requested:
+                        requested.append(value)
+            if not requested:
+                return {
+                    "error": "specify at least one category ID",
+                    "available_categories": sorted(details_map),
+                }
+            found: dict[str, Any] = {}
+            unknown: list[str] = []
+            for item in requested:
+                detail = details_map.get(item)
+                if detail is None:
+                    unknown.append(item)
+                else:
+                    found[item] = {
+                        "title": titles.get(item, item),
+                        **(detail if isinstance(detail, dict) else {}),
+                    }
+            receipts.append(
+                {
+                    "tool": "get_category_details",
+                    "categories": requested,
+                    "status": "ok" if found else "error",
+                }
+            )
+            payload: dict[str, Any] = {"categories": found}
+            if unknown:
+                payload["unknown_categories"] = unknown
+                payload["available_categories"] = sorted(details_map)
+            return payload
+
+        return StructuredTool.from_function(
+            func=get_category_details,
+            name="get_category_details",
+            description=(
+                "Fetch the full CWE IDs and check items for one or more audit category IDs "
+                "on demand when you need details beyond category_catalog."
+            ),
+        )
 
     async def run_json_agent(
         self,
@@ -199,14 +258,47 @@ class TraceExecution:
             if isinstance(item, dict) and str(item.get("task_id", "")) == task_id
         ]
 
-    def category_details_for(self, task: Mapping[str, Any]) -> dict[str, Any]:
+    def _raw_category_details(self) -> dict[str, Any]:
+        details = self.category_details
+        if isinstance(details.get("categories"), dict):
+            return details["categories"]
+        return details if isinstance(details, dict) else {}
+
+    def category_catalog_for(self, task: Mapping[str, Any]) -> list[dict[str, Any]]:
+        titles = {category.id: category.title for category in self.manifest.categories}
+        details = self._raw_category_details()
+        catalog: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in self.category_checks_for(task):
+            category_id = str(item.get("category", "")).strip()
+            if not category_id or category_id in seen:
+                continue
+            seen.add(category_id)
+            detail = details.get(category_id)
+            cwe_ids = detail.get("cwe_ids", []) if isinstance(detail, dict) else []
+            catalog.append(
+                {
+                    "id": category_id,
+                    "title": titles.get(category_id, category_id),
+                    "cwe_count": len(cwe_ids) if isinstance(cwe_ids, list) else 0,
+                }
+            )
+        return catalog
+
+    def category_details_for(
+        self,
+        task: Mapping[str, Any],
+        *,
+        only: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
         ids = {
             str(item.get("category", ""))
             for item in self.category_checks_for(task)
         }
-        details = self.category_details
-        if isinstance(details.get("categories"), dict):
-            details = details["categories"]
+        if only is not None:
+            requested = {str(item).strip() for item in only if str(item).strip()}
+            ids &= requested
+        details = self._raw_category_details()
         return {
             key: value
             for key, value in details.items()
@@ -214,43 +306,45 @@ class TraceExecution:
         }
 
     def business_view(self, task: Mapping[str, Any]) -> dict[str, Any]:
-        if str(task.get("kind", "")) != "logic":
+        if not isinstance(self.business, dict) or not self.business:
             return {}
-        refs = task.get("business_refs")
-        refs = refs if isinstance(refs, dict) else {}
-        constraints = {
-            str(item.get("id", "")): item
-            for item in self.business.get("constraints", [])
-            if isinstance(item, dict)
-        }
-        operations = {
-            str(item.get("id", "")): item
-            for item in self.business.get("operations", [])
-            if isinstance(item, dict)
-        }
-        investigations = {
-            str(item.get("id", "")): item
-            for item in self.business.get("investigations", [])
-            if isinstance(item, dict)
-        }
-        return {
-            "question": str(task.get("question", "")),
-            "constraints": [
-                constraints[str(item)]
-                for item in refs.get("constraint_ids", [])
-                if str(item) in constraints
-            ],
-            "operations": [
-                operations[str(item)]
-                for item in refs.get("operation_ids", [])
-                if str(item) in operations
-            ],
-            "investigations": [
-                investigations[str(item)]
-                for item in refs.get("investigation_ids", [])
-                if str(item) in investigations
-            ],
-        }
+        if str(task.get("kind", "")) == "logic":
+            refs = task.get("business_refs")
+            refs = refs if isinstance(refs, dict) else {}
+            constraints = {
+                str(item.get("id", "")): item
+                for item in self.business.get("constraints", [])
+                if isinstance(item, dict)
+            }
+            operations = {
+                str(item.get("id", "")): item
+                for item in self.business.get("operations", [])
+                if isinstance(item, dict)
+            }
+            investigations = {
+                str(item.get("id", "")): item
+                for item in self.business.get("investigations", [])
+                if isinstance(item, dict)
+            }
+            return {
+                "question": str(task.get("question", "")),
+                "constraints": [
+                    constraints[str(item)]
+                    for item in refs.get("constraint_ids", [])
+                    if str(item) in constraints
+                ],
+                "operations": [
+                    operations[str(item)]
+                    for item in refs.get("operation_ids", [])
+                    if str(item) in operations
+                ],
+                "investigations": [
+                    investigations[str(item)]
+                    for item in refs.get("investigation_ids", [])
+                    if str(item) in investigations
+                ],
+            }
+        return _compact_business_for_task(self.business, task)
 
     def entry_view(self, task: Mapping[str, Any]) -> dict[str, Any]:
         values = [
@@ -284,12 +378,14 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
     if not tasks:
         return _empty_result(state, audit)
     all_tasks = _merge_tasks(state.get("tasks") or [], tasks)
-    pending = [
-        task for task in all_tasks
-        if str(task.get("status", "planned")) in {
-            "planned", "deferred", "partial", "failed"
-        }
-    ]
+    pending = _prioritize_pending_tasks(
+        [
+            task for task in all_tasks
+            if str(task.get("status", "planned")) in {
+                "planned", "deferred", "partial", "failed"
+            }
+        ]
+    )
     if not pending:
         return _completed_result(state, audit, all_tasks)
     audit_budget = context.audit_budget or AuditBudget.create(context.settings.audit_timeout)
@@ -394,8 +490,12 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
     )
     verify_reserve = int(getattr(context.settings, "audit_verify_reserve", 0) or 0)
     trace_deadline = audit_budget.trace_deadline(verify_reserve)
+    wave_size = int(getattr(context.settings, "audit_trace_wave_size", 0) or 0)
+    trace_visits = int(((state.get("framework") or {}).get("visits") or {}).get("trace", 0) or 0)
+    wave_limited = wave_size > 0 and trace_visits < MAX_NODE_VISITS - 2 and len(pending) > wave_size
+    wave_pending = pending[:wave_size] if wave_limited else pending
     async with open_yasa_mcp(context.settings, repository) as session:
-        for batch in _batches(pending, max(1, int(context.settings.audit_max_agents))):
+        for batch in _batches(wave_pending, max(1, int(context.settings.audit_max_agents))):
             if audit_budget.trace_expired(verify_reserve):
                 for task in batch:
                     deferred.append(str(task.get("id", "")))
@@ -469,7 +569,7 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
                 "mechanism_checks": mechanism_checks,
                 "traces": traces,
                 "summaries": summaries,
-                "trace": _stage_summary(tasks, traces, deferred, trace_gaps),
+                "trace": _stage_summary(all_tasks, traces, deferred, trace_gaps),
                 "framework": {
                     **dict(state.get("framework") or {}),
                     "trace_done": True,
@@ -477,9 +577,23 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
             }
             write_trace_checkpoint(merged)
 
+    has_remaining_pending = any(
+        str(item.get("status", "planned")) in {"planned", "deferred", "partial", "failed"}
+        for item in all_tasks
+    )
     status = "complete"
-    if deferred or any(str(item.get("status")) != "complete" for item in traces):
+    if (
+        deferred
+        or has_remaining_pending
+        or any(str(item.get("status")) != "complete" for item in traces)
+    ):
         status = "partial"
+    if status == "complete":
+        stop_reason = "trace_complete"
+    elif wave_limited and not deferred:
+        stop_reason = "trace_wave_complete"
+    else:
+        stop_reason = "trace_partial"
     trace_summary = _stage_summary(all_tasks, traces, deferred, trace_gaps)
     trace_summary["status"] = status
     trace_summary["model"] = model_name(model)
@@ -501,7 +615,7 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
     )
     return {
         "status": status,
-        "stop_reason": "trace_complete" if status == "complete" else "trace_partial",
+        "stop_reason": stop_reason,
         "next_action": "verify",
         "tasks": all_tasks,
         "category_checks": category_checks,
@@ -802,6 +916,150 @@ def _empty_result(state: Mapping[str, Any], audit: Mapping[str, Any]) -> dict[st
 
 def _batches(tasks: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     return [tasks[index : index + size] for index in range(0, len(tasks), size)]
+
+
+_TASK_PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
+_TASK_KIND_RANK = {"logic": 0, "patch": 1, "entry": 2}
+
+
+def _prioritize_pending_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    indexed = list(enumerate(tasks))
+    indexed.sort(
+        key=lambda item: (
+            _TASK_PRIORITY_RANK.get(str(item[1].get("priority", "normal")).lower(), 1),
+            _TASK_KIND_RANK.get(str(item[1].get("kind", "entry")).lower(), 2),
+            item[0],
+        )
+    )
+    return [task for _, task in indexed]
+
+
+def _evidence_anchors(items: Any, limit: int = 4) -> list[str]:
+    anchors: list[str] = []
+    if not isinstance(items, list):
+        return anchors
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path", "")).strip()
+        if not path:
+            continue
+        start = item.get("start_line")
+        end = item.get("end_line")
+        anchor = f"{path}:{start}-{end}" if start and end else path
+        if anchor not in anchors:
+            anchors.append(anchor)
+        if len(anchors) >= limit:
+            break
+    return anchors
+
+
+def _evidence_paths(items: Any) -> set[str]:
+    if not isinstance(items, list):
+        return set()
+    return {
+        str(item.get("path", "")).strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("path", "")).strip()
+    }
+
+
+def _compact_business_for_task(
+    business: Mapping[str, Any],
+    task: Mapping[str, Any],
+) -> dict[str, Any]:
+    task_id = str(task.get("id", ""))
+    entry_ids = {str(item) for item in (task.get("entry_ids") or []) if item}
+    patch_ids = {str(item) for item in (task.get("patch_ids") or []) if item}
+    task_paths = {str(item) for item in (task.get("paths") or []) if item}
+
+    matched_operations: list[dict[str, Any]] = []
+    matched_op_ids: set[str] = set()
+    for op in business.get("operations", []):
+        if not isinstance(op, dict):
+            continue
+        op_entries = {str(item) for item in (op.get("entry_ids") or []) if item}
+        op_patches = {str(item) for item in (op.get("patch_ids") or []) if item}
+        op_paths = _evidence_paths(op.get("locations")) | _evidence_paths(op.get("evidence"))
+        if (
+            (entry_ids and entry_ids & op_entries)
+            or (patch_ids and patch_ids & op_patches)
+            or (task_paths and task_paths & op_paths)
+        ):
+            op_id = str(op.get("id", ""))
+            if op_id:
+                matched_op_ids.add(op_id)
+            matched_operations.append(
+                {
+                    "id": op_id,
+                    "name": str(op.get("name", ""))[:160],
+                    "actor": str(op.get("actor", ""))[:120],
+                    "resource": str(op.get("resource", ""))[:120],
+                    "guards": list(op.get("guards", []) or [])[:6],
+                    "effects": list(op.get("effects", []) or [])[:4],
+                    "anchors": _evidence_anchors(op.get("locations") or op.get("evidence")),
+                }
+            )
+            if len(matched_operations) >= 6:
+                break
+
+    matched_investigations: list[dict[str, Any]] = []
+    referenced_constraint_ids: set[str] = set()
+    for inv in business.get("investigations", []):
+        if not isinstance(inv, dict):
+            continue
+        inv_entries = {str(item) for item in (inv.get("entry_ids") or []) if item}
+        inv_ops = {str(item) for item in (inv.get("operation_ids") or []) if item}
+        if (
+            (task_id and str(inv.get("task_id", "")) == task_id)
+            or (entry_ids and entry_ids & inv_entries)
+            or (matched_op_ids and matched_op_ids & inv_ops)
+        ):
+            for cid in inv.get("constraint_ids", []) or []:
+                if cid:
+                    referenced_constraint_ids.add(str(cid))
+            matched_investigations.append(
+                {
+                    "id": str(inv.get("id", "")),
+                    "question": str(inv.get("question", ""))[:240],
+                    "outcome": str(inv.get("outcome", "")),
+                    "reason": str(inv.get("reason", ""))[:240],
+                    "anchors": _evidence_anchors(inv.get("evidence")),
+                }
+            )
+            if len(matched_investigations) >= 4:
+                break
+
+    direct_constraints: list[dict[str, Any]] = []
+    global_constraints: list[dict[str, Any]] = []
+    for constraint in business.get("constraints", []):
+        if not isinstance(constraint, dict):
+            continue
+        cid = str(constraint.get("id", ""))
+        c_paths = _evidence_paths(constraint.get("supporting_evidence")) | _evidence_paths(
+            constraint.get("counterevidence")
+        )
+        compact = {
+            "id": cid,
+            "description": str(constraint.get("description", ""))[:240],
+            "source_kind": str(constraint.get("source_kind", "")),
+            "applicability": str(constraint.get("applicability", "")),
+            "reason": str(constraint.get("reason", ""))[:200],
+            "anchors": _evidence_anchors(constraint.get("supporting_evidence")),
+        }
+        if cid in referenced_constraint_ids or (task_paths and task_paths & c_paths):
+            direct_constraints.append(compact)
+        elif str(constraint.get("applicability", "")) == "applicable":
+            global_constraints.append(compact)
+    constraints = [*direct_constraints, *global_constraints][:6]
+
+    if not (constraints or matched_operations or matched_investigations):
+        return {}
+    return {
+        "constraints": constraints,
+        "operations": matched_operations,
+        "investigations": matched_investigations,
+    }
 
 
 def _set_task_status(tasks: list[dict[str, Any]], task_id: str, status: str) -> None:

@@ -46,7 +46,7 @@ class AuditGraphTest(unittest.TestCase):
 
             self.assertEqual(
                 result["framework"]["executed"],
-                ["prepare", "plan", "trace", "recon", "trace", "verify", "gate", "finalize"],
+                ["prepare", "plan", "recon", "trace", "verify", "gate", "finalize"],
             )
             self.assertEqual(result["status"], "partial")
             self.assertEqual(result["stop_reason"], "gate_partial")
@@ -76,8 +76,8 @@ class AuditGraphTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             _record_transition(state, "trace", "bogus")  # type: ignore[arg-type]
 
-    def test_trace_routes_to_recon_then_verify(self) -> None:
-        self.assertEqual(trace({"framework": {"recon_done": False}})["next_action"], "recon")
+    def test_trace_routes_to_verify_without_recon_detour(self) -> None:
+        self.assertEqual(trace({"framework": {"recon_done": False}})["next_action"], "verify")
         self.assertEqual(trace({"framework": {"recon_done": True}})["next_action"], "verify")
 
     def test_verify_without_artifacts_routes_to_gate(self) -> None:

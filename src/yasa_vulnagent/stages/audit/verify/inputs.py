@@ -45,17 +45,31 @@ class VerifyInputs:
         return values[0] if len(values) == 1 else {"patches": values}
 
     def business_for(self, task: Mapping[str, Any]) -> dict[str, Any]:
-        refs = task.get("business_refs") if isinstance(task.get("business_refs"), dict) else {}
-        if not refs:
+        if not isinstance(self.business, dict) or not self.business:
             return {}
-        return {
-            key: [
-                item
-                for item in self.business.get(key, [])
-                if isinstance(item, dict) and str(item.get("id", "")) in set(refs.get(key, []))
-            ]
-            for key in ("constraints", "operations", "investigations")
-        }
+        refs = task.get("business_refs") if isinstance(task.get("business_refs"), dict) else {}
+        ref_key_map = (
+            ("constraints", "constraint_ids"),
+            ("operations", "operation_ids"),
+            ("investigations", "investigation_ids"),
+        )
+        if refs and any(refs.get(ref_key) or refs.get(key) for key, ref_key in ref_key_map):
+            result: dict[str, Any] = {}
+            for key, ref_key in ref_key_map:
+                wanted = {
+                    str(item)
+                    for item in (refs.get(ref_key) or refs.get(key) or [])
+                    if item
+                }
+                result[key] = [
+                    item
+                    for item in self.business.get(key, [])
+                    if isinstance(item, dict) and str(item.get("id", "")) in wanted
+                ]
+            return result
+        from ..trace.execution import _compact_business_for_task
+
+        return _compact_business_for_task(self.business, task)
 
 
 def load_inputs(state: Mapping[str, Any], paths: AuditPaths | None = None) -> VerifyInputs:

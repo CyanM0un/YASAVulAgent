@@ -63,11 +63,30 @@ def freshly_read(
     receipts: Iterable[Mapping[str, Any]],
 ) -> tuple[bool, list[str]]:
     """Check that this agent read each evidence file at a relevant range."""
-    reads = [
-        item
-        for item in receipts
-        if item.get("tool") == "read_file" and item.get("status", "ok") == "ok"
-    ]
+    reads: list[tuple[str, int, int]] = []
+    for item in receipts:
+        if item.get("status", "ok") != "ok":
+            continue
+        tool = item.get("tool")
+        if tool == "read_file":
+            reads.append(
+                (
+                    str(item.get("path", "")),
+                    _int(item.get("start_line")),
+                    _int(item.get("end_line")),
+                )
+            )
+        elif tool == "get_function":
+            for span in item.get("spans") or []:
+                if not isinstance(span, Mapping):
+                    continue
+                reads.append(
+                    (
+                        str(span.get("path", "")),
+                        _int(span.get("start_line")),
+                        _int(span.get("end_line")),
+                    )
+                )
     missing: list[str] = []
     by_path: dict[str, list[Mapping[str, Any]]] = {}
     for item in evidence:
@@ -78,11 +97,9 @@ def freshly_read(
             start = _int(item.get("start_line"))
             end = _int(item.get("end_line"))
             item_covered = False
-            for receipt in reads:
-                if str(receipt.get("path", "")) != path:
+            for r_path, r_start, r_end in reads:
+                if r_path != path:
                     continue
-                r_start = _int(receipt.get("start_line"))
-                r_end = _int(receipt.get("end_line"))
                 if r_start <= start and r_end >= end:
                     item_covered = True
                     break
@@ -287,6 +304,7 @@ def build_review(
     review_id_value: str,
     mode: str,
     model: str,
+    require_fresh_read: bool = True,
 ) -> tuple[dict[str, Any], list[str]]:
     """Validate an independent review or second-verifier adjudication."""
     verdict = str(payload.get("verdict", "")).strip()
@@ -319,10 +337,11 @@ def build_review(
     if not evidence:
         gaps.append("review returned no valid current-source evidence")
         return review, gaps
-    fresh, missing = freshly_read(evidence, receipts)
-    if not fresh:
-        gaps.append("review did not read current source for: " + ", ".join(missing))
-        return review, gaps
+    if require_fresh_read:
+        fresh, missing = freshly_read(evidence, receipts)
+        if not fresh:
+            gaps.append("review did not read current source for: " + ", ".join(missing))
+            return review, gaps
     if verdict == "needs_validation" and not review["missing_facts"]:
         gaps.append("review needs_validation requires missing_facts")
         return review, gaps

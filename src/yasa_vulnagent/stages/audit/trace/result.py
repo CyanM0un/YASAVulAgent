@@ -209,7 +209,11 @@ def validate_category_checks(
     expected: list[dict[str, Any]],
     flows: list[dict[str, Any]],
     evidence_index: EvidenceIndex,
+    likely_families: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    highlighted = {
+        str(item).strip() for item in (likely_families or []) if str(item).strip()
+    }
     raw_by_category: dict[str, dict[str, Any]] = {}
     gaps: list[str] = []
     if isinstance(raw, list):
@@ -249,8 +253,9 @@ def validate_category_checks(
             status = "pending"
             gaps.append(f"category {category}: checked without a reason")
         if applicability == "not_applicable" and not evidence and not refs:
-            applicability = "unknown"
-            gaps.append(f"category {category}: not_applicable without evidence")
+            if not (highlighted and category not in highlighted and len(reason) >= 15):
+                applicability = "unknown"
+                gaps.append(f"category {category}: not_applicable without evidence")
         result.append(
             {
                 **check,

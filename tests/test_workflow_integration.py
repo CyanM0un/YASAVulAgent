@@ -43,7 +43,7 @@ class WorkflowIntegrationTest(unittest.TestCase):
             self.assertNotIn("scaffold", state["audit"])
             self.assertEqual(
                 state["audit"]["executed_nodes"],
-                ["prepare", "plan", "trace", "recon", "trace", "verify", "gate", "finalize"],
+                ["prepare", "plan", "recon", "trace", "verify", "gate", "finalize"],
             )
             audit_dir = Path(state["stages"][2]["artifact_dir"])
             for name in (

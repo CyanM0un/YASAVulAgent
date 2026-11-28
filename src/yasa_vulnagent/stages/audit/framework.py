@@ -9,13 +9,13 @@ from __future__ import annotations
 from typing import Any
 
 
-NODE_NAMES = ("prepare", "plan", "trace", "recon", "verify", "gate", "finalize")
+NODE_NAMES = ("prepare", "plan", "recon", "trace", "verify", "gate", "finalize")
 MAX_NODE_VISITS = 4
 
 FRAMEWORK_EDGES = (
     ("START", "prepare"),
     ("prepare", "plan"),
-    ("plan", "trace"),
+    ("plan", "recon"),
     ("recon", "trace"),
     ("finalize", "END"),
 )

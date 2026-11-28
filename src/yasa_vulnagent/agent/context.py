@@ -14,7 +14,7 @@ class ContextManager:
         self,
         counter: TokenCounter,
         *,
-        max_tokens: int = 40_000,
+        max_tokens: int = 96_000,
         trigger: float = 0.8,
         keep_recent_results: int = 3,
     ) -> None:

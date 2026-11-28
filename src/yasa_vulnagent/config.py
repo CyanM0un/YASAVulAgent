@@ -45,6 +45,8 @@ DEFAULT_SCREEN_WAVE_MAX_TASKS = 6
 DEFAULT_AUDIT_MODE = "combined"
 DEFAULT_AUDIT_TIMEOUT = 3600
 DEFAULT_AUDIT_VERIFY_RESERVE = 900
+DEFAULT_AUDIT_TRACE_WAVE_SIZE = 16
+DEFAULT_AUDIT_VERIFY_WAVE_LIMIT = 16
 DEFAULT_AUDIT_RECURSION_LIMIT = 50
 DEFAULT_AUDIT_MAX_AGENTS = 4
 DEFAULT_AUDIT_PLAN_BATCH_SIZE = 100
@@ -136,7 +138,7 @@ DEFAULT_PATCH_MAX_MODEL_CALLS = 24
 DEFAULT_AGENT_HARD_TASK_CAP = 128
 DEFAULT_AGENT_TOOL_RESULT_TOKENS = 2000
 DEFAULT_AGENT_KEEP_RECENT_RESULTS = 3
-DEFAULT_AGENT_CONTEXT_TOKENS = 40000
+DEFAULT_AGENT_CONTEXT_TOKENS = 96000
 DEFAULT_AGENT_COMPACTION_TRIGGER = 0.8
 DEFAULT_AGENT_TOKEN_SAFETY = 1.2
 DEFAULT_TOOLS_FS_READ_TIMEOUT = 10
@@ -207,6 +209,8 @@ class Settings:
     audit_mode: str = DEFAULT_AUDIT_MODE
     audit_timeout: int = DEFAULT_AUDIT_TIMEOUT
     audit_verify_reserve: int = DEFAULT_AUDIT_VERIFY_RESERVE
+    audit_trace_wave_size: int = DEFAULT_AUDIT_TRACE_WAVE_SIZE
+    audit_verify_wave_limit: int = DEFAULT_AUDIT_VERIFY_WAVE_LIMIT
     audit_recursion_limit: int = DEFAULT_AUDIT_RECURSION_LIMIT
     audit_max_agents: int = DEFAULT_AUDIT_MAX_AGENTS
     audit_plan_batch_size: int = DEFAULT_AUDIT_PLAN_BATCH_SIZE
@@ -504,6 +508,12 @@ def load_settings(env_file: Path | None = None) -> Settings:
         audit_timeout=positive_int("AUDIT_TIMEOUT", DEFAULT_AUDIT_TIMEOUT),
         audit_verify_reserve=non_negative_int(
             "AUDIT_VERIFY_RESERVE", DEFAULT_AUDIT_VERIFY_RESERVE
+        ),
+        audit_trace_wave_size=non_negative_int(
+            "AUDIT_TRACE_WAVE_SIZE", DEFAULT_AUDIT_TRACE_WAVE_SIZE
+        ),
+        audit_verify_wave_limit=non_negative_int(
+            "AUDIT_VERIFY_WAVE_LIMIT", DEFAULT_AUDIT_VERIFY_WAVE_LIMIT
         ),
         audit_recursion_limit=positive_int(
             "AUDIT_RECURSION_LIMIT", DEFAULT_AUDIT_RECURSION_LIMIT

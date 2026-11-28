@@ -24,7 +24,8 @@ def verify(state: dict[str, Any], runtime: Runtime[RunContext] | None = None) ->
     budget = context.audit_budget or AuditBudget.create(context.settings.audit_timeout)
     context = replace(context, audit_budget=budget)
     result = run_coroutine(run_verify_stage(state, context))
-    result["next_action"] = "gate"
+    next_action = str(result.get("next_action") or "gate")
+    result["next_action"] = next_action if next_action in {"trace", "gate"} else "gate"
     result["framework"] = {
         **framework,
         **dict(result.get("framework") or {}),

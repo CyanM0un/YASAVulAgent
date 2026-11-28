@@ -53,6 +53,7 @@ async def lead_task(
             run_id=execution.run_id,
             receipts=receipts,
             repair_debts=execution.repair_for(task).get("debts", []),
+            likely_families=_strings(triage.get("likely_families")),
         )
     except Exception as exc:
         return _failed(str(exc), specialist_results, receipts)
@@ -73,6 +74,7 @@ def validate_lead(
     run_id: str,
     receipts: list[dict[str, Any]] | None = None,
     repair_debts: list[dict[str, Any]] | None = None,
+    likely_families: list[str] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("lead output must be an object")
@@ -144,6 +146,7 @@ def validate_lead(
         expected=expected_categories,
         flows=flows,
         evidence_index=evidence_index,
+        likely_families=likely_families,
     )
     mechanism_checks, mechanism_gaps = validate_mechanism_checks(
         payload.get("mechanisms"),
@@ -261,6 +264,14 @@ def _prompt(
     specialist_results: list[dict[str, Any]],
     execution: Any,
 ) -> dict[str, Any]:
+    highlighted = _strings(triage.get("likely_families"))[:3]
+    catalog_fn = getattr(execution, "category_catalog_for", None)
+    category_catalog = catalog_fn(task) if callable(catalog_fn) else []
+    category_details = (
+        execution.category_details_for(task, only=highlighted)
+        if highlighted
+        else {}
+    )
     return {
         "task": {
             "id": task.get("id", ""),
@@ -279,14 +290,16 @@ def _prompt(
             "yasa": scout.get("yasa", {}),
         },
         "triage": {
+            "likely_families": highlighted,
             "units": triage.get("units", []),
             "delegations": triage.get("delegations", []),
             "gaps": triage.get("gaps", []),
         },
-        "specialists": specialist_results,
+        "specialists": _compact_specialists(specialist_results),
         "required_categories": execution.category_checks_for(task),
         "required_mechanisms": execution.mechanism_checks_for(task),
-        "category_details": execution.category_details_for(task),
+        "category_catalog": category_catalog,
+        "category_details": category_details,
         "known_summaries": execution.summary_index.all()[:20],
         "repair": execution.repair_for(task),
         "known_rejections": execution.rejections.for_task(
@@ -298,6 +311,21 @@ def _prompt(
             limit=8,
         ),
     }
+
+
+def _compact_specialists(specialist_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for result in specialist_results:
+        if not isinstance(result, dict):
+            continue
+        compacted.append(
+            {
+                key: value
+                for key, value in result.items()
+                if key != "tool_receipts"
+            }
+        )
+    return compacted
 
 
 def _failed(

@@ -7,6 +7,23 @@ specialist results, behavior summaries, and current source.
 
 Rules:
 - Read current source before relying on any endpoint, guard, or patch conclusion.
+- Specialist `flows` and `observations` have already been validated and hydrated
+  against current source by the runtime (`quote` is exact current source text).
+  Do not spend tool rounds re-reading the exact same lines already quoted by a
+  specialist unless you need surrounding context, missing guards, or further
+  downstream calls.
+- `category_catalog` lists every required category (ID, title, CWE count), and
+  `category_details` preloads the full checklist only for triage-highlighted
+  `likely_families`. Call `get_category_details` on demand whenever you need the
+  full checklist for another category.
+- For categories outside `triage.likely_families` that clearly do not apply to
+  this entry (for example native memory or file uploads on a pure JSON status
+  handler), close them concisely as `not_applicable` with a concrete reason
+  explaining why; spend your tool budget tracing real candidate flows and
+  guards.
+- Use the supplied `business` context (global security invariants, framework
+  auth/middleware constraints, and sensitive operations) to avoid re-discovering
+  shared framework guards from scratch and to spot business-invariant breaks.
 - `repair` lists gate debts for this task. Address each debt explicitly and
   return one `repair_responses` item per debt. A `resolved` item must say which
   check, flow, mechanism, or unit evidence now closes the debt; do not claim

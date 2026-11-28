@@ -30,18 +30,18 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_ACTIONS = {
     "prepare": "plan",
-    "plan": "trace",
-    "trace": "recon",
+    "plan": "recon",
     "recon": "trace",
+    "trace": "verify",
     "verify": "gate",
     "gate": "finalize",
     "finalize": "finalize",
 }
 _ALLOWED_ACTIONS = {
     "prepare": {"plan"},
-    "plan": {"trace"},
-    "trace": {"trace", "recon", "verify", "gate"},
+    "plan": {"recon"},
     "recon": {"trace"},
+    "trace": {"trace", "recon", "verify", "gate"},
     "verify": {"trace", "verify", "gate"},
     "gate": {"trace", "verify", "recon", "finalize"},
     "finalize": {"finalize"},
@@ -55,17 +55,17 @@ def build_audit_graph():
     workflow = StateGraph(AuditState, context_schema=RunContext)
     workflow.add_node("prepare", _with_transition("prepare", prepare))
     workflow.add_node("plan", _with_transition("plan", plan))
-    workflow.add_node("trace", _with_transition("trace", trace))
     workflow.add_node("recon", _with_transition("recon", recon))
+    workflow.add_node("trace", _with_transition("trace", trace))
     workflow.add_node("verify", _with_transition("verify", verify))
     workflow.add_node("gate", _with_transition("gate", gate))
     workflow.add_node("finalize", _with_transition("finalize", finalize))
 
     workflow.add_edge(START, "prepare")
     workflow.add_edge("prepare", "plan")
-    workflow.add_edge("plan", "trace")
-    workflow.add_conditional_edges("trace", _route_after_trace, _TRACE_ROUTES)
+    workflow.add_edge("plan", "recon")
     workflow.add_edge("recon", "trace")
+    workflow.add_conditional_edges("trace", _route_after_trace, _TRACE_ROUTES)
     workflow.add_conditional_edges("verify", _route_after_verify, _VERIFY_ROUTES)
     workflow.add_conditional_edges("gate", _route_after_gate, _GATE_ROUTES)
     workflow.add_edge("finalize", END)

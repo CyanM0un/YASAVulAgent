@@ -68,11 +68,11 @@ class AuditStageTest(unittest.TestCase):
             self.assertNotIn("pending_nodes", summary)
             self.assertEqual(
                 summary["executed_nodes"],
-                ["prepare", "plan", "trace", "recon", "trace", "verify", "gate", "finalize"],
+                ["prepare", "plan", "recon", "trace", "verify", "gate", "finalize"],
             )
             self.assertEqual(
                 summary["implemented_nodes"],
-                ["prepare", "plan", "trace", "recon", "verify", "gate", "finalize"],
+                ["prepare", "plan", "recon", "trace", "verify", "gate", "finalize"],
             )
             self.assertIn("prepare", summary)
             self.assertEqual(summary["prepare"]["scope_file_count"], 1)
@@ -102,7 +102,7 @@ class AuditStageTest(unittest.TestCase):
             self.assertNotIn("pending_nodes", audit)
             self.assertEqual(
                 audit["execution"]["implemented_nodes"],
-                ["prepare", "plan", "trace", "recon", "verify", "gate", "finalize"],
+                ["prepare", "plan", "recon", "trace", "verify", "gate", "finalize"],
             )
             self.assertEqual(audit["execution"]["executed_nodes"], summary["executed_nodes"])
 
@@ -197,7 +197,7 @@ class AuditStageTest(unittest.TestCase):
 
             self.assertEqual(
                 update["audit"]["executed_nodes"],
-                ["prepare", "plan", "trace", "verify", "gate", "finalize"],
+                ["prepare", "plan", "recon", "trace", "verify", "gate", "finalize"],
             )
             self.assertEqual(len(list(audit_dir.glob("state.json"))), 1)
             audit = json.loads(audit_file.read_text(encoding="utf-8"))

@@ -15,10 +15,8 @@ from .execution import run_trace_stage
 
 
 def trace(state: dict[str, Any], runtime: Runtime[RunContext] | None = None) -> dict[str, object]:
-    """Run candidate-chain tracing after recon has completed."""
+    """Run candidate-chain tracing and route candidate flows to verify."""
     framework = dict(state.get("framework") or {})
-    if not framework.get("recon_done"):
-        return {"next_action": "recon"}
     if not state.get("artifact_dir"):
         return {
             "next_action": "verify",

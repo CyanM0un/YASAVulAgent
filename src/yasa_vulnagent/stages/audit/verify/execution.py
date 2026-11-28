@@ -20,6 +20,7 @@ from ....workflow.state import RunContext
 from ...discover.screen.mcp import open_yasa_mcp
 from ...discover.screen.tools import ReadCache, SourceToolbox
 from ..budget import AuditBudget, AuditTaskBudget
+from ..framework import MAX_NODE_VISITS
 from ..prepare.inventory import current_revision
 from ..storage import paths_from_state, write_verify_checkpoint
 from ..trace.result import EvidenceIndex
@@ -76,29 +77,32 @@ class VerifyExecution:
         max_rounds: int,
         stage: str,
         task_id: str,
+        tools_enabled: bool = True,
     ) -> dict[str, Any]:
-        source = SourceToolbox(
-            self.repository,
-            allowed_paths=self.scope_files,
-            task_id=task_id,
-            max_output_chars=12000,
-            cache=self.cache,
-        )
-        source.receipts = receipts
-        tools = [
-            tool
-            for tool in source.langchain_tools()
-            if getattr(tool, "name", "") != "save_note"
-        ]
-        if self.mcp_session is not None:
-            yasa = TraceYasaToolbox(
-                self.mcp_session,
+        tools: list[Any] = []
+        if tools_enabled:
+            source = SourceToolbox(
                 self.repository,
+                allowed_paths=self.scope_files,
+                task_id=task_id,
                 max_output_chars=12000,
-                budget=self.task_budget,
+                cache=self.cache,
             )
-            yasa.receipts = receipts
-            tools.extend(yasa.langchain_tools())
+            source.receipts = receipts
+            tools = [
+                tool
+                for tool in source.langchain_tools()
+                if getattr(tool, "name", "") != "save_note"
+            ]
+            if self.mcp_session is not None:
+                yasa = TraceYasaToolbox(
+                    self.mcp_session,
+                    self.repository,
+                    max_output_chars=12000,
+                    budget=self.task_budget,
+                )
+                yasa.receipts = receipts
+                tools.extend(yasa.langchain_tools())
         counter = TokenCounter(self.settings.model, self.settings.agent_token_safety)
         context = ContextManager(
             counter,
@@ -128,7 +132,7 @@ class VerifyExecution:
                 max_result_tokens=self.settings.agent_tool_result_tokens,
                 request_timeout=REQUEST_TIMEOUT_SECONDS,
                 parallel_tools=True,
-                finalize_on_exhaustion=False,
+                finalize_on_exhaustion=True,
                 tool_store=self.store,
                 model_semaphore=self.model_semaphore,
             )
@@ -223,6 +227,9 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
         item for item in findings.values() if _needs_review(item, reviews)
     ]
     open_items = [*review_pending, *pending]
+    continue_trace_wave = _should_continue_trace_wave(
+        state, inputs, budget, context.settings
+    )
     if not open_items:
         return _finish(
             state,
@@ -230,10 +237,11 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
             reviews=reviews,
             inputs=inputs,
             gaps=gaps,
-            status="complete",
-            stop_reason="no_candidates",
+            status="partial" if continue_trace_wave else "complete",
+            stop_reason="verify_wave_complete" if continue_trace_wave else "no_candidates",
             model={"status": "not_run", "model": ""},
             deferred=0,
+            next_action="trace" if continue_trace_wave else "gate",
         )
     if budget.expired():
         return _finish(
@@ -246,6 +254,7 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
             stop_reason="verify_budget_exhausted",
             model={"status": "not_run", "model": ""},
             deferred=len(open_items),
+            next_action="gate",
         )
     try:
         model = build_model(context)
@@ -263,7 +272,15 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
             stop_reason="verify_model_unavailable",
             model={"status": "unavailable", "model": ""},
             deferred=len(open_items),
+            next_action="gate",
         )
+
+    wave_limit = int(getattr(context.settings, "audit_verify_wave_limit", 0) or 0)
+    wave_items = (
+        open_items[:wave_limit]
+        if continue_trace_wave and wave_limit > 0 and len(open_items) > wave_limit
+        else open_items
+    )
 
     task_budget = AuditTaskBudget(
         deadline=budget.deadline,
@@ -289,7 +306,7 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
     deferred = 0
     async with open_yasa_mcp(context.settings, repository) as session:
         execution.mcp_session = session
-        for batch in _batches(open_items, max(1, int(context.settings.audit_max_agents))):
+        for batch in _batches(wave_items, max(1, int(context.settings.audit_max_agents))):
             if budget.expired():
                 deferred += len(batch)
                 continue
@@ -328,8 +345,17 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
         item for item in findings.values() if _needs_review(item, reviews)
     ]
     open_items = [*pending, *review_pending]
-    status = "complete" if not open_items else "partial"
-    stop_reason = "verify_complete" if status == "complete" else "verify_partial"
+    continue_trace_wave = _should_continue_trace_wave(
+        state, inputs, budget, context.settings
+    )
+    if continue_trace_wave:
+        status = "partial"
+        stop_reason = "verify_wave_complete"
+        next_action = "trace"
+    else:
+        status = "complete" if not open_items else "partial"
+        stop_reason = "verify_complete" if status == "complete" else "verify_partial"
+        next_action = "gate"
     return _finish(
         state,
         findings=findings,
@@ -340,6 +366,7 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
         stop_reason=stop_reason,
         model={"status": model_status, "model": model_label},
         deferred=deferred,
+        next_action=next_action,
     )
 
 
@@ -366,10 +393,18 @@ async def _run_one(
     if verdict not in {"confirmed", "rejected"}:
         return updated, None, gaps
 
-    review, review_gaps = await _independent_review(
-        updated, candidate_execution, seed
-    )
-    gaps.extend(review_gaps)
+    if verdict == "rejected":
+        review, review_gaps, escalate = await _fast_reject_review(
+            updated, candidate_execution, seed
+        )
+        gaps.extend(review_gaps)
+        if escalate:
+            return await _adjudicate(updated, candidate_execution, seed, review)
+    else:
+        review, review_gaps = await _independent_review(
+            updated, candidate_execution, seed
+        )
+        gaps.extend(review_gaps)
     if review.get("status") != "complete":
         updated["verdict"] = "candidate"
         return updated, review, gaps
@@ -387,7 +422,11 @@ async def _review_only(
     candidate_execution = _candidate_execution(execution)
     task = _task_for(finding, execution.inputs)
     seed = _seed(finding, task, execution.inputs)
-    review, gaps = await _independent_review(finding, candidate_execution, seed)
+    review, gaps, escalate = await _fast_reject_review(
+        finding, candidate_execution, seed
+    )
+    if escalate:
+        return await _adjudicate(finding, candidate_execution, seed, review)
     if review.get("status") != "complete":
         return finding, review, gaps
     if str(review.get("verdict", "")) == "rejected":
@@ -404,6 +443,106 @@ def _candidate_execution(execution: VerifyExecution) -> VerifyExecution:
             deadline=execution.task_budget.deadline,
             max_model_calls=max(1, int(execution.settings.agent_hard_task_cap)),
         ),
+    )
+
+
+async def _fast_reject_review(
+    finding: dict[str, Any],
+    execution: VerifyExecution,
+    seed: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Single-round tool-free check for rejected findings with runtime-hydrated quotes."""
+    hydrated_evidence, _ = _hydrated_evidence_for_review(finding, execution.evidence)
+    if not hydrated_evidence:
+        review, gaps = await _independent_review(finding, execution, seed)
+        return review, gaps, False
+    review_receipts: list[dict[str, Any]] = []
+    finding_view = {
+        **compact_finding(finding),
+        "evidence": hydrated_evidence,
+    }
+    try:
+        review_payload = await execution.run_agent(
+            system_prompt=load_prompt("review.md"),
+            user_prompt=json.dumps(
+                {
+                    "mode": "fast_reject_review",
+                    "finding": finding_view,
+                    "candidate": _candidate_view(seed.get("candidate")),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            receipts=review_receipts,
+            max_rounds=1,
+            stage="audit.verify.review",
+            task_id=str(finding["id"]),
+            tools_enabled=False,
+        )
+    except Exception as exc:
+        return (
+            _blocked_review(finding, str(exc), mode="fast_reject_review"),
+            [f"fast reject review failed: {exc}"],
+            False,
+        )
+    needs_full = bool(
+        isinstance(review_payload, Mapping) and review_payload.get("needs_full_review")
+    )
+    if isinstance(review_payload, Mapping) and not review_payload.get("evidence"):
+        review_payload = {**dict(review_payload), "evidence": hydrated_evidence}
+    review, gaps = build_review(
+        review_payload,
+        finding,
+        execution.evidence,
+        review_receipts,
+        review_id_value=str(finding.get("review_id") or f"review-{finding['id']}"),
+        mode="fast_reject_review",
+        model=getattr(execution, "model_label", ""),
+        require_fresh_read=False,
+    )
+    if needs_full:
+        return review, gaps, True
+    if review.get("status") != "complete":
+        fallback, fallback_gaps = await _independent_review(finding, execution, seed)
+        return fallback, [*gaps, *fallback_gaps], False
+    return review, gaps, False
+
+
+def _hydrated_evidence_for_review(
+    finding: Mapping[str, Any],
+    evidence_index: EvidenceIndex,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    raw = finding.get("evidence")
+    if isinstance(raw, list) and raw and all(
+        isinstance(item, dict) and str(item.get("code", "")).strip() for item in raw
+    ):
+        return [dict(item) for item in raw], []
+    from .result import normalize_evidence
+
+    return normalize_evidence(raw, evidence_index, "finding.evidence")
+
+
+def _should_continue_trace_wave(
+    state: Mapping[str, Any],
+    inputs: VerifyInputs,
+    budget: AuditBudget,
+    settings: Settings,
+) -> bool:
+    wave_size = int(getattr(settings, "audit_trace_wave_size", 0) or 0)
+    if wave_size <= 0:
+        return False
+    if str(state.get("stop_reason", "")) != "trace_wave_complete":
+        return False
+    verify_reserve = int(getattr(settings, "audit_verify_reserve", 0) or 0)
+    if budget.trace_expired(verify_reserve):
+        return False
+    trace_visits = int(((state.get("framework") or {}).get("visits") or {}).get("trace", 0) or 0)
+    if trace_visits >= MAX_NODE_VISITS - 1:
+        return False
+    return any(
+        str(task.get("status", "planned")) in {"planned", "deferred", "partial", "failed"}
+        and bool(task.get("entry_ids") or task.get("patch_ids") or task.get("paths"))
+        for task in inputs.tasks
     )
 
 
@@ -647,6 +786,7 @@ def _finish(
     stop_reason: str,
     model: Mapping[str, Any],
     deferred: int,
+    next_action: str = "gate",
 ) -> dict[str, Any]:
     summary = _summary(
         findings,
@@ -662,7 +802,7 @@ def _finish(
         **dict(state),
         "status": status,
         "stop_reason": stop_reason,
-        "next_action": "gate",
+        "next_action": next_action,
         "findings": list(findings.values()),
         "reviews": list(reviews.values()),
         "verify": summary,
@@ -720,16 +860,18 @@ def _summary(
 ) -> dict[str, Any]:
     counts = verdict_counts(findings.values())
     candidate = sum(1 for item in findings.values() if item.get("verdict") == "candidate")
-    complete_reviews = {
-        str(item.get("target_id", ""))
-        for item in reviews.values()
-        if item.get("status") == "complete" and item.get("type") == "finding"
-    }
+    complete_reviews: dict[str, set[str]] = {}
+    for item in reviews.values():
+        if item.get("status") == "complete" and item.get("type") == "finding":
+            complete_reviews.setdefault(str(item.get("target_id", "")), set()).add(
+                str(item.get("verdict", ""))
+            )
     pending_review = sum(
         1
         for item in findings.values()
-        if item.get("verdict") == "confirmed"
-        and str(item.get("id", "")) not in complete_reviews
+        if str(item.get("verdict", "")) in {"confirmed", "rejected"}
+        and str(item.get("verdict", ""))
+        not in complete_reviews.get(str(item.get("id", "")), set())
     )
     return {
         "status": status,

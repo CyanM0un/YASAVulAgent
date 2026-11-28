@@ -47,6 +47,12 @@ Rules:
   source fact could change the rejection.
 - Use only unit_id values from the supplied chains.
 - Use only role ids from available_specialists.
+- Delegate specialists sparingly (0 to 2 roles per task). Only request a
+  specialist when a unit has concrete cross-file complexity for that lens (for
+  example, non-trivial auth/tenant checks for `identity`, file/archive/SSRF/
+  deserialization/parser sinks for `boundary`, or reflection/DI/annotation/event
+  dispatch when `dynamic_suspected` is true). Routine handlers that the trace
+  lead can finish directly do not need specialist delegations.
 - Every delegation needs a concrete focus_question and grounding.
 - dataflow analysis belongs to the lead; do not request a dataflow specialist.
 - A unit may have more than one delegation if it needs different lenses.
