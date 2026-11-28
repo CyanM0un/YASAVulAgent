@@ -93,6 +93,71 @@ class _HTMLTextParser(HTMLParser):
             self.parts.append(data.strip())
 
 
+_NOISE_DIRS = frozenset(
+    {
+        "locale",
+        "locales",
+        "i18n",
+        "translations",
+        "translation",
+        "l10n",
+        "fixtures",
+        "fixture",
+        "testdata",
+        "__fixtures__",
+        "snapshots",
+        "__snapshots__",
+    }
+)
+_LOCALE_FILE_RE = re.compile(r"^[a-z]{2}(?:[_-][a-zA-Z0-9]{2,4})?\.(?:json|ya?ml|po|pot)$")
+_P0_NAMES = frozenset(
+    {
+        "dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+        "pyproject.toml",
+        "setup.cfg",
+        "go.mod",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "package.json",
+        "cargo.toml",
+        "makefile",
+        ".env.example",
+        "chart.yaml",
+        "values.yaml",
+    }
+)
+_P0_PREFIXES = ("readme", "security", "architecture", "design", "threat", "dockerfile")
+_P3_PREFIXES = ("changelog", "history", "license", "copying", "contributing", "code_of_conduct", "authors")
+
+
+def document_priority(relative: str) -> tuple[int, int, str]:
+    """Return deterministic sort key (tier, depth, path) for document prioritization."""
+    norm = str(relative or "").replace("\\", "/").removeprefix("./")
+    lowered = norm.lower()
+    parts = Path(lowered).parts
+    depth = len(parts)
+    name = parts[-1] if parts else lowered
+    stem = Path(name).stem
+    if any(name.startswith(prefix) for prefix in _P3_PREFIXES) or "issue_template" in lowered:
+        return (3, depth, lowered)
+    if depth <= 2 and (name in _P0_NAMES or any(name.startswith(prefix) for prefix in _P0_PREFIXES)):
+        return (0, depth, lowered)
+    if (
+        (parts and parts[0] in {"docs", "doc"})
+        or lowered.startswith(".github/workflows/")
+        or any(token in stem for token in ("security", "auth", "deploy", "api", "arch", "install", "config"))
+    ):
+        return (1, depth, lowered)
+    if Path(name).suffix in {".json", ".txt"}:
+        return (3, depth, lowered)
+    return (2, depth, lowered)
+
+
 class DocumentToolbox:
     """Read-only repository and documentation tools used by the documents graph."""
 
@@ -551,7 +616,9 @@ class DocumentToolbox:
         ]
 
     def seed_candidates(self, max_results: int = 500) -> list[str]:
-        return [self._relative(path) for path in self._candidate_files(self.repository)[:max_results]]
+        candidates = [self._relative(path) for path in self._candidate_files(self.repository)]
+        candidates.sort(key=document_priority)
+        return candidates[:max_results]
 
     def allow_url(self, url: str, depth: int = 0) -> None:
         normalized = self._normalize_url(url)
@@ -592,7 +659,9 @@ class DocumentToolbox:
             relative = path.resolve().relative_to(self.repository)
         except ValueError:
             return True
-        if any(part in _EXCLUDED_DIRS for part in relative.parts):
+        if any(part in _EXCLUDED_DIRS or part.lower() in _NOISE_DIRS for part in relative.parts):
+            return True
+        if _LOCALE_FILE_RE.match(path.name):
             return True
         if path.name in _SECRET_NAMES or (path.name.startswith(".env.") and path.name != ".env.example"):
             return True

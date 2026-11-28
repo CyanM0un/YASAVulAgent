@@ -32,12 +32,13 @@ from .chunks import (
 )
 from ..index import InitIndex
 from .schema import DocumentsState, parse_json_object
-from .tools import DocumentToolbox
+from .tools import DocumentToolbox, document_priority
 
 
 logger = logging.getLogger(__name__)
 
 MAX_AGENT_CHUNKS = 12
+MAX_INVENTORY_DOCUMENTS = 40
 
 
 @trace_node("init.documents")
@@ -103,10 +104,10 @@ def discover(state: DocumentsState, runtime: Runtime[RunContext]) -> dict[str, A
     )
     seed_candidates = toolbox.seed_candidates()
     logger.info("documents discovery seed_candidates=%s", len(seed_candidates))
-    seed_text = "\n".join(seed_candidates[:500])
+    seed_text = "\n".join(seed_candidates[:120])
     user_prompt = (
         f"Repository root: {state['repository']}\n"
-        "The controller found these candidate project-owned paths. Verify and classify them; use tools for more context.\n"
+        "The controller found these prioritized candidate project-owned paths (README/security/build/deploy first). Verify and classify them; use tools for more context.\n"
         f"{seed_text}\n"
         "Return the requested JSON object only."
     )
@@ -135,9 +136,10 @@ def discover(state: DocumentsState, runtime: Runtime[RunContext]) -> dict[str, A
     except (DocumentsError, TimeoutError) as exc:
         warning = f"documents discovery stopped: {exc}"
         warnings = [warning]
-        _write_inventory(artifact_dir, [], warnings)
+        fallback_inventory = _normalize_inventory({"documents": []}, toolbox, seed_candidates, warnings)
+        _write_inventory(artifact_dir, fallback_inventory, warnings)
         return {
-            "inventory": [],
+            "inventory": fallback_inventory,
             "notes": [],
             "unknowns": [],
             "document_index": 0,
@@ -153,9 +155,10 @@ def discover(state: DocumentsState, runtime: Runtime[RunContext]) -> dict[str, A
     except ValueError as exc:
         warning = f"documents discovery returned invalid JSON: {exc}"
         warnings = [warning]
-        _write_inventory(artifact_dir, [], warnings)
+        fallback_inventory = _normalize_inventory({"documents": []}, toolbox, seed_candidates, warnings)
+        _write_inventory(artifact_dir, fallback_inventory, warnings)
         return {
-            "inventory": [],
+            "inventory": fallback_inventory,
             "notes": [],
             "unknowns": [],
             "document_index": 0,
@@ -617,6 +620,19 @@ def _normalize_inventory(
                 "cursor": 1,
             }
         )
+    inventory.sort(
+        key=lambda item: (
+            document_priority(str(item.get("reference", "")))
+            if item.get("source") == "local"
+            else (1, 0, str(item.get("reference", "")))
+        )
+    )
+    if len(inventory) > MAX_INVENTORY_DOCUMENTS:
+        warnings.append(
+            f"documents inventory capped at {MAX_INVENTORY_DOCUMENTS} prioritized files "
+            f"({len(inventory) - MAX_INVENTORY_DOCUMENTS} lower-priority files deferred)"
+        )
+        inventory = inventory[:MAX_INVENTORY_DOCUMENTS]
     return inventory
 
 

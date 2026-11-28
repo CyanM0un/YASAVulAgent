@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import json
 import logging
@@ -512,6 +513,7 @@ class SourceToolbox:
                 path,
                 f"path is a directory, not a file; use list_directory('{rel}') instead",
                 error_kind="directory",
+                extra={"suggested_tool": "list_directory", "suggested_args": {"path": rel}},
             )
         candidate = Path(raw) if raw else Path(".")
         if candidate.is_absolute():
@@ -535,6 +537,7 @@ class SourceToolbox:
                 path,
                 "path is a directory outside this task's scope; use list_directory on an allowed directory",
                 error_kind="directory",
+                extra={"suggested_tool": "list_directory"},
             )
         if resolved.is_file():
             return self._error(
@@ -547,7 +550,13 @@ class SourceToolbox:
         detail = "file does not exist in the repository; verify the path with list_directory or glob"
         if suggestions:
             detail += f"; similar allowed paths: {', '.join(suggestions)}"
-        return self._error("read_file", path, detail, error_kind="missing")
+        return self._error(
+            "read_file",
+            path,
+            detail,
+            error_kind="missing",
+            extra={"suggested_paths": suggestions},
+        )
 
     def _suggest_similar_paths(self, path: str, limit: int = 5) -> list[str]:
         normalized = path.replace("\\", "/").removeprefix("./")
@@ -557,19 +566,36 @@ class SourceToolbox:
             parent = ""
         exact_name: list[str] = []
         same_parent: list[str] = []
-        scanned = 0
+        all_paths: list[str] = []
+        by_basename: dict[str, list[str]] = {}
         for allowed in self._iter_allowed_paths():
-            scanned += 1
-            if scanned > 2000:
+            if len(all_paths) >= 2000:
                 break
-            if basename and Path(allowed).name.lower() == basename:
+            all_paths.append(allowed)
+            allowed_base = Path(allowed).name.lower()
+            by_basename.setdefault(allowed_base, []).append(allowed)
+            if basename and allowed_base == basename:
                 exact_name.append(allowed)
-                if len(exact_name) >= limit:
-                    break
             elif parent and (allowed.startswith(parent + "/") or str(Path(allowed).parent) == parent):
                 if len(same_parent) < limit:
                     same_parent.append(allowed)
-        return (exact_name + [item for item in same_parent if item not in exact_name])[:limit]
+        ordered: list[str] = []
+        for item in exact_name:
+            if item not in ordered:
+                ordered.append(item)
+        if len(ordered) < limit and basename:
+            for close_base in difflib.get_close_matches(basename, list(by_basename.keys()), n=limit, cutoff=0.6):
+                for item in by_basename.get(close_base, []):
+                    if item not in ordered:
+                        ordered.append(item)
+        for item in same_parent:
+            if item not in ordered:
+                ordered.append(item)
+        if len(ordered) < limit and normalized:
+            for item in difflib.get_close_matches(normalized, all_paths, n=limit, cutoff=0.55):
+                if item not in ordered:
+                    ordered.append(item)
+        return ordered[:limit]
 
     def _error(
         self,
@@ -578,9 +604,18 @@ class SourceToolbox:
         message: str,
         *,
         error_kind: str = "error",
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._record_error(tool, target, message, error_kind=error_kind)
-        return {"error": message, "error_kind": error_kind, "tool": tool, "target": target}
+        payload: dict[str, Any] = {
+            "error": message,
+            "error_kind": error_kind,
+            "tool": tool,
+            "target": target,
+        }
+        if extra:
+            payload.update(extra)
+        return payload
 
     def _record_error(
         self,

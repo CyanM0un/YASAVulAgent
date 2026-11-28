@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,7 +32,22 @@ class ReviewToolbox:
     ) -> dict[str, Any]:
         relative = Path(str(path)).as_posix().removeprefix("./")
         if relative not in self.allowed_paths:
-            return {"error": "path is not related to open debt", "tool": "read_file", "path": relative}
+            candidate = (self.repository / relative).resolve()
+            if candidate.is_dir():
+                return {
+                    "error": "path is a directory, not a file",
+                    "error_kind": "directory",
+                    "tool": "read_file",
+                    "path": relative,
+                }
+            suggestions = difflib.get_close_matches(relative, sorted(self.allowed_paths), n=5, cutoff=0.55)
+            return {
+                "error": "path is not related to open debt",
+                "error_kind": "out_of_scope" if candidate.is_file() else "missing",
+                "suggested_paths": suggestions,
+                "tool": "read_file",
+                "path": relative,
+            }
         file_path = (self.repository / relative).resolve()
         try:
             file_path.relative_to(self.repository)

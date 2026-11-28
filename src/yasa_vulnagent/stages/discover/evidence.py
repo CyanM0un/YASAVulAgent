@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import re
 from pathlib import Path
@@ -16,6 +17,20 @@ _REF_RE = re.compile(
 
 def _relative(path: str) -> str:
     return str(path).removeprefix("./")
+
+
+def _suggest_inventory_paths(ledger: DiscoverLedger, relative: str, limit: int = 3) -> list[str]:
+    paths = [str(item.get("path", "")) for item in ledger.iter_files(limit=2000) if item.get("path")]
+    if not paths:
+        return []
+    basename = Path(relative).name.lower()
+    exact = [p for p in paths if Path(p).name.lower() == basename]
+    fuzzy = difflib.get_close_matches(relative, paths, n=limit, cutoff=0.55)
+    merged: list[str] = []
+    for item in [*exact, *fuzzy]:
+        if item not in merged:
+            merged.append(item)
+    return merged[:limit]
 
 
 def line_count(path: Path) -> int:
@@ -40,7 +55,11 @@ def validate_location(
         return {"ok": False, "error": "evidence path is not repository-relative"}
     row = ledger.get_file(relative)
     if row is None:
-        return {"ok": False, "error": f"evidence path is not in inventory: {relative}"}
+        suggestions = _suggest_inventory_paths(ledger, relative)
+        detail = f"evidence path is not in inventory: {relative}"
+        if suggestions:
+            detail += f"; similar paths: {', '.join(suggestions)}"
+        return {"ok": False, "error": detail, "suggested_paths": suggestions}
     if row.get("content_type") != "text" or row.get("usage_hint") != "production-candidate":
         return {"ok": False, "error": f"evidence path is not production text: {relative}"}
     if int(start) < 1 or int(end) < int(start):
