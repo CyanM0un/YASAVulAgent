@@ -20,16 +20,17 @@ class DiscoverLimitConfigTest(unittest.TestCase):
         settings = self._load()
 
         self.assertEqual(settings.discover_recursion_limit, 50)
-        self.assertEqual(settings.discover_timeout, 0)
+        self.assertEqual(settings.discover_timeout, 900)
         self.assertEqual(settings.discover_max_total_tokens, 0)
         self.assertEqual(settings.screen_task_max_rounds, 16)
         self.assertEqual(settings.screen_wave_timeout, 1200)
         self.assertEqual(settings.screen_wave_model_calls, 96)
         self.assertEqual(settings.planner_max_calls, 6)
         self.assertEqual(settings.safe_dict()["discover_recursion_limit"], 50)
-        self.assertEqual(settings.safe_dict()["discover_timeout"], 0)
+        self.assertEqual(settings.safe_dict()["discover_timeout"], 900)
         self.assertEqual(settings.safe_dict()["discover_max_total_tokens"], 0)
         self.assertEqual(settings.safe_dict()["screen_task_max_rounds"], 16)
+        self.assertEqual(self._load(DISCOVER_TIMEOUT="0").discover_timeout, 0)
 
     def test_discover_limits_read_from_environment(self) -> None:
         settings = self._load(

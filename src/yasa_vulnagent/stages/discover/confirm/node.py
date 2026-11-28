@@ -19,6 +19,7 @@ from ....observability import trace_node
 from ....storage import utc_now
 from ....workflow.state import RunContext
 from ..agent import TASK_MAX_ATTEMPTS, run_task_agent, task_tool_store
+from ..budget import exceeded_reason
 from ..evidence import validate_location, validate_refs
 from ..features import (
     ensure_confirm_tasks_for_candidates,
@@ -37,6 +38,8 @@ logger = logging.getLogger(__name__)
 _TERMINAL = {"confirmed", "not_applicable", "unknown", "deferred"}
 _FIELDS = ("input_origin", "registration", "activation", "input_binding", "trust_boundary")
 _ROLES = {"source", "registration", "activation", "binding", "boundary", "unknown"}
+_DERIVED_ORIGINS = frozenset({"feature", "same_file"})
+_CONFIRM_MAX_CONSECUTIVE_WAVES = 4
 
 
 @lru_cache(maxsize=4)
@@ -462,7 +465,7 @@ def _expand_after_task(
 ) -> dict[str, int]:
     created = {"confirm": 0, "screen": 0}
     current_paths = set(ledger.task_scope_paths(str(task.get("task_id", ""))))
-    raw_same = parsed.get("same_file_targets", [])
+    raw_same = [] if str(task.get("origin", "")) in _DERIVED_ORIGINS else parsed.get("same_file_targets", [])
     if isinstance(raw_same, list):
         for item in raw_same[: max(0, int(max_same_file))]:
             if not isinstance(item, dict):
@@ -608,6 +611,8 @@ def _process_confirm_observations(
     observations: list[dict[str, Any]] = []
     read_ranges_by_task: dict[str, list[dict[str, Any]]] = {}
     for task in tasks:
+        if str(task.get("origin", "")) in _DERIVED_ORIGINS:
+            continue
         task_id = str(task.get("task_id", ""))
         read_ranges_by_task[task_id] = list(task.get("read_ranges", []))
         for item in task.get("feature_observations", []):
@@ -837,13 +842,28 @@ def confirm(
         confirm_meta["features"] = feature_summary
         confirm_meta["follow_up_queue_count"] = len(pending_after)
         candidate_count = ledger.count_entries("candidate")
-        if pending_after:
+        completed_in_wave = sum(1 for item in results if str(item.get("status", "")) == "complete")
+        consecutive = int(confirm_meta.get("consecutive_waves", 0)) + 1
+        budget_exceeded = bool(exceeded_reason(state, context))
+        if (
+            pending_after
+            and completed_in_wave > 0
+            and not budget_exceeded
+            and consecutive < _CONFIRM_MAX_CONSECUTIVE_WAVES
+        ):
+            confirm_meta["consecutive_waves"] = consecutive
+            next_action = "confirm"
+            stop_reason = "confirm_pending"
+        elif pending_after:
+            confirm_meta["consecutive_waves"] = 0
             next_action = "review"
             stop_reason = "confirm_pending"
         elif candidate_count:
+            confirm_meta["consecutive_waves"] = 0
             next_action = "review"
             stop_reason = "confirm_queue_empty"
         else:
+            confirm_meta["consecutive_waves"] = 0
             next_action = "review"
             stop_reason = "confirm_complete"
         update = _state_update(

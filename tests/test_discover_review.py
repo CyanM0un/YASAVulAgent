@@ -299,7 +299,12 @@ class DiscoverReviewTest(unittest.TestCase):
             state = self._state(root)
             state["discover_deadline"] = "2020-01-01T00:00:00+00:00"
             model = _Model('{"route":"finalize","dispositions":[],"new_tasks":[]}')
-            result = review(state, SimpleNamespace(context=self._context(root, model)))
+            context = self._context(root, model)
+            context = replace(
+                context,
+                settings=replace(context.settings, discover_timeout=0, discover_max_total_tokens=0),
+            )
+            result = review(state, SimpleNamespace(context=context))
             self.assertEqual(result["next_action"], "confirm")
             self.assertNotIn("budget", result["stop_reason"])
 

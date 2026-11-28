@@ -100,14 +100,32 @@ def review(
             record["route"] = _route_for_debt(debt)
             record["blocking_gaps"] = ["review runtime context is unavailable"]
         remaining = ledger.debt_items()
+        prev_review = state.get("review") if isinstance(state.get("review"), dict) else {}
+        prev_debt = int(prev_review.get("debt_remaining", 0) or 0)
+        prev_stagnant = int(prev_review.get("stagnant_rounds", 0) or 0)
+        if remaining and prev_debt > 0 and len(remaining) >= prev_debt:
+            stagnant_rounds = prev_stagnant + 1
+        else:
+            stagnant_rounds = 0
+        record["stagnant_rounds"] = stagnant_rounds
         record["debt_remaining"] = len(remaining)
         record["disposed_count"] = len(record["dispositions"])
         record["blocking_gap_count"] = len(record.get("blocking_gaps", []))
         record["deferred_count"] = ledger.disposition_count("deferred")
         record["handoff_count"] = len(ledger.open_handoffs())
+        convergence_stop = ""
+        max_rounds = int(getattr(settings, "review_max_rounds", 6) or 0)
+        max_stagnant = max(1, int(getattr(settings, "review_stagnation_waves", 3) or 3))
         if remaining:
             record["route"] = _route_for_debt(remaining)
             record["status"] = "partial"
+            if not budget_reason:
+                if max_rounds > 0 and round_number >= max_rounds:
+                    record["route"] = "finalize"
+                    convergence_stop = "review_round_limit"
+                elif stagnant_rounds >= max_stagnant:
+                    record["route"] = "finalize"
+                    convergence_stop = "review_stagnated"
         elif record["blocking_gaps"]:
             record["route"] = "finalize"
             record["status"] = "partial"
@@ -156,6 +174,8 @@ def review(
             "stop_reason": (
                 budget_reason
                 if budget_reason
+                else convergence_stop
+                if convergence_stop
                 else "review_complete"
                 if record["status"] == "complete"
                 else "review_unavailable"
