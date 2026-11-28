@@ -40,6 +40,7 @@ from .model import (
     model_name,
     parse_json_object,
 )
+from .priority import prioritize_candidates
 from .result import (
     build_candidate,
     build_review,
@@ -215,37 +216,53 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
     )
 
     budget = context.audit_budget or AuditBudget.create(context.settings.audit_timeout)
-    pending = [item for item in findings.values() if item.get("verdict") == "candidate"]
+    pending = prioritize_candidates(
+        item for item in findings.values() if item.get("verdict") == "candidate"
+    )
     review_pending = [
         item for item in findings.values() if _needs_review(item, reviews)
     ]
-    open_items = [*pending, *review_pending]
-    model: Any | None = None
-    model_status = "not_run"
-    model_label = ""
-    if open_items:
-        if budget.expired():
-            model_status = "budget_exhausted"
-        else:
-            try:
-                model = build_model(context)
-                model_label = model_name(model)
-                model_status = "used"
-            except VerifyConfigurationError as exc:
-                model_status = "unavailable"
-                gaps.append(str(exc))
-
-    if not open_items or model is None:
+    open_items = [*review_pending, *pending]
+    if not open_items:
         return _finish(
             state,
             findings=findings,
             reviews=reviews,
             inputs=inputs,
             gaps=gaps,
-            status="complete" if not open_items else "partial",
-            stop_reason="no_candidates" if not open_items else "verify_model_unavailable",
-            model={"status": model_status, "model": model_label},
-            deferred=len(open_items) if model is None else 0,
+            status="complete",
+            stop_reason="no_candidates",
+            model={"status": "not_run", "model": ""},
+            deferred=0,
+        )
+    if budget.expired():
+        return _finish(
+            state,
+            findings=findings,
+            reviews=reviews,
+            inputs=inputs,
+            gaps=gaps,
+            status="partial",
+            stop_reason="verify_budget_exhausted",
+            model={"status": "not_run", "model": ""},
+            deferred=len(open_items),
+        )
+    try:
+        model = build_model(context)
+        model_label = model_name(model)
+        model_status = "used"
+    except VerifyConfigurationError as exc:
+        gaps.append(str(exc))
+        return _finish(
+            state,
+            findings=findings,
+            reviews=reviews,
+            inputs=inputs,
+            gaps=gaps,
+            status="partial",
+            stop_reason="verify_model_unavailable",
+            model={"status": "unavailable", "model": ""},
+            deferred=len(open_items),
         )
 
     task_budget = AuditTaskBudget(

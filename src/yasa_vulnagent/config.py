@@ -44,6 +44,7 @@ DEFAULT_DISCOVER_NOTE_CHARS = 2000
 DEFAULT_SCREEN_WAVE_MAX_TASKS = 6
 DEFAULT_AUDIT_MODE = "combined"
 DEFAULT_AUDIT_TIMEOUT = 3600
+DEFAULT_AUDIT_VERIFY_RESERVE = 900
 DEFAULT_AUDIT_RECURSION_LIMIT = 50
 DEFAULT_AUDIT_MAX_AGENTS = 4
 DEFAULT_AUDIT_PLAN_BATCH_SIZE = 100
@@ -96,6 +97,7 @@ DEFAULT_VALIDATE_COMMAND_TIMEOUT = 600
 DEFAULT_VALIDATE_TOTAL_TIMEOUT = 1800
 DEFAULT_VALIDATE_MAX_TOTAL_TOKENS = 0
 DEFAULT_VALIDATE_MAX_TOTAL_COST = 0.0
+DEFAULT_VALIDATE_CANDIDATE_FALLBACK_LIMIT = 0
 DEFAULT_REPORT_MODEL = ""
 DEFAULT_REPORT_LANGUAGE = "en"
 DEFAULT_REPORT_LLM_TIMEOUT = 300
@@ -204,6 +206,7 @@ class Settings:
     discover_max_total_tokens: int = DEFAULT_DISCOVER_MAX_TOTAL_TOKENS
     audit_mode: str = DEFAULT_AUDIT_MODE
     audit_timeout: int = DEFAULT_AUDIT_TIMEOUT
+    audit_verify_reserve: int = DEFAULT_AUDIT_VERIFY_RESERVE
     audit_recursion_limit: int = DEFAULT_AUDIT_RECURSION_LIMIT
     audit_max_agents: int = DEFAULT_AUDIT_MAX_AGENTS
     audit_plan_batch_size: int = DEFAULT_AUDIT_PLAN_BATCH_SIZE
@@ -245,6 +248,7 @@ class Settings:
     validate_total_timeout: int = DEFAULT_VALIDATE_TOTAL_TIMEOUT
     validate_max_total_tokens: int = DEFAULT_VALIDATE_MAX_TOTAL_TOKENS
     validate_max_total_cost: float = DEFAULT_VALIDATE_MAX_TOTAL_COST
+    validate_candidate_fallback_limit: int = DEFAULT_VALIDATE_CANDIDATE_FALLBACK_LIMIT
     report_model: str = DEFAULT_REPORT_MODEL
     report_language: str = DEFAULT_REPORT_LANGUAGE
     report_llm_timeout: int = DEFAULT_REPORT_LLM_TIMEOUT
@@ -498,6 +502,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
         ),
         audit_mode=read_audit_mode(),
         audit_timeout=positive_int("AUDIT_TIMEOUT", DEFAULT_AUDIT_TIMEOUT),
+        audit_verify_reserve=non_negative_int(
+            "AUDIT_VERIFY_RESERVE", DEFAULT_AUDIT_VERIFY_RESERVE
+        ),
         audit_recursion_limit=positive_int(
             "AUDIT_RECURSION_LIMIT", DEFAULT_AUDIT_RECURSION_LIMIT
         ),
@@ -742,6 +749,10 @@ def load_settings(env_file: Path | None = None) -> Settings:
         ),
         validate_max_total_cost=non_negative_float(
             "VALIDATE_MAX_TOTAL_COST", DEFAULT_VALIDATE_MAX_TOTAL_COST
+        ),
+        validate_candidate_fallback_limit=non_negative_int(
+            "VALIDATE_CANDIDATE_FALLBACK_LIMIT",
+            DEFAULT_VALIDATE_CANDIDATE_FALLBACK_LIMIT,
         ),
         report_model=value("REPORT_MODEL").strip(),
         report_language=value("REPORT_LANGUAGE").strip() or DEFAULT_REPORT_LANGUAGE,

@@ -212,7 +212,18 @@ def _run_validation(
     audit_file = audit_path(state)
     audit = load_audit(audit_file)
     explicit = list(validation.get("explicit_finding_ids") or [])
-    selected = select_findings(audit, explicit or None)
+    fallback_limit = int(getattr(context.settings, "validate_candidate_fallback_limit", 0) or 0)
+    selected = select_findings(
+        audit,
+        explicit or None,
+        candidate_fallback_limit=fallback_limit,
+    )
+    used_fallback = bool(
+        not explicit
+        and selected
+        and all(str(item.get("verdict", "")) == "candidate" for item in selected)
+    )
+    validation["selection_source"] = "candidate_fallback" if used_fallback else "verified"
     validation["source_audit"] = str(audit_file)
     validation["selected_finding_ids"] = [str(item.get("id", "")) for item in selected]
     validation["findings"] = selected
@@ -543,6 +554,7 @@ def _persist(
 def _selection(validation: dict[str, Any], audit_file: Path) -> dict[str, Any]:
     return {
         "source_audit": str(audit_file),
+        "selection_source": str(validation.get("selection_source", "verified")),
         "selected_finding_ids": validation.get("selected_finding_ids", []),
         "repo_commit": validation.get("repo_commit", ""),
         "environment": validation.get("environment", {}),

@@ -57,11 +57,23 @@ def gate(state: dict[str, Any], runtime: Runtime[RunContext] | None = None) -> d
     if not previous:
         previous = inputs.audit.get("gate") if isinstance(inputs.audit.get("gate"), dict) else {}
 
+    verify_reserve = int(getattr(context.settings, "audit_verify_reserve", 0) or 0)
     if action != "finalize":
         if budget.expired():
             action = "finalize"
             status = "partial"
             stop_reason = "gate_budget_exhausted"
+        elif action == "trace" and budget.trace_expired(verify_reserve):
+            if int(result.get("finding_debt_count", 0) or 0) > 0 or int(
+                result.get("review_debt_count", 0) or 0
+            ) > 0:
+                action = "verify"
+                status = "partial"
+                stop_reason = "gate_pending"
+            else:
+                action = "finalize"
+                status = "partial"
+                stop_reason = "gate_budget_exhausted"
         elif int(framework.get("visits", {}).get("gate", 0)) >= MAX_NODE_VISITS:
             action = "finalize"
             status = "partial"

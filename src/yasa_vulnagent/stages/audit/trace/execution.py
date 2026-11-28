@@ -392,9 +392,11 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
     model_semaphore = asyncio.Semaphore(
         max(1, int(context.settings.audit_model_concurrency))
     )
+    verify_reserve = int(getattr(context.settings, "audit_verify_reserve", 0) or 0)
+    trace_deadline = audit_budget.trace_deadline(verify_reserve)
     async with open_yasa_mcp(context.settings, repository) as session:
         for batch in _batches(pending, max(1, int(context.settings.audit_max_agents))):
-            if audit_budget.expired():
+            if audit_budget.trace_expired(verify_reserve):
                 for task in batch:
                     deferred.append(str(task.get("id", "")))
                     _set_task_status(all_tasks, str(task.get("id", "")), "deferred")
@@ -409,7 +411,7 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
             runs = []
             for task in batch:
                 budget = TraceTaskBudget(
-                    deadline=audit_budget.deadline,
+                    deadline=trace_deadline,
                     max_model_calls=max(1, int(context.settings.agent_hard_task_cap)),
                 )
                 runs.append(

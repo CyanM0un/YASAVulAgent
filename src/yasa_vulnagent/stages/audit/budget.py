@@ -26,6 +26,20 @@ class AuditBudget:
     def expired(self) -> bool:
         return self.remaining_seconds() <= 0
 
+    def effective_verify_reserve(self, reserve_seconds: int) -> float:
+        """Reserve up to 40% of total audit time so verify is not starved by trace."""
+        reserve = max(0.0, float(reserve_seconds))
+        total = max(0.0, self.deadline - self.started_at)
+        if reserve <= 0 or total <= 0:
+            return 0.0
+        return min(reserve, total * 0.4)
+
+    def trace_deadline(self, reserve_seconds: int) -> float:
+        return max(self.started_at, self.deadline - self.effective_verify_reserve(reserve_seconds))
+
+    def trace_expired(self, reserve_seconds: int) -> bool:
+        return time.monotonic() >= self.trace_deadline(reserve_seconds)
+
     def snapshot(self) -> dict[str, float]:
         return {
             "remaining_seconds": self.remaining_seconds(),

@@ -34,7 +34,10 @@ def load_audit(path: Path) -> dict[str, Any]:
 
 
 def select_findings(
-    audit: Mapping[str, Any], explicit: list[str] | None = None
+    audit: Mapping[str, Any],
+    explicit: list[str] | None = None,
+    *,
+    candidate_fallback_limit: int = 0,
 ) -> list[dict[str, Any]]:
     findings = [item for item in (audit.get("findings") or []) if isinstance(item, dict)]
     by_id = {str(item.get("id", "")): item for item in findings}
@@ -54,11 +57,16 @@ def select_findings(
                 seen.add(str(finding_id))
                 selected.append(finding)
         return selected
-    return [
+    eligible = [
         item
         for item in findings
         if str(item.get("verdict", "")) in ELIGIBLE_VERDICTS
     ]
+    if eligible or int(candidate_fallback_limit) <= 0:
+        return eligible
+    from ..audit.verify.priority import fallback_eligible_candidates
+
+    return fallback_eligible_candidates(findings, limit=int(candidate_fallback_limit))
 
 
 def docker_runtime(settings: Settings) -> dict[str, Any]:
