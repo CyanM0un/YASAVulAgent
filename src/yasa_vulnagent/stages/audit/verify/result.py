@@ -76,7 +76,7 @@ def freshly_read(
                     _int(item.get("end_line")),
                 )
             )
-        elif tool == "get_function":
+        elif tool in {"get_function", "get_class_by_name"}:
             for span in item.get("spans") or []:
                 if not isinstance(span, Mapping):
                     continue

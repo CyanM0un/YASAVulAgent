@@ -21,6 +21,7 @@ from ....workflow.state import RunContext
 from ...discover.screen.mcp import open_yasa_mcp
 from ...discover.screen.tools import ReadCache, SourceToolbox
 from ..budget import AuditBudget, AuditTaskBudget
+from ..mcp_pool import use_yasa_mcp
 from ..prepare.inventory import current_revision
 from ..storage import (
     AuditPaths,
@@ -212,7 +213,7 @@ async def run_recon_stage(
     store = ToolResultStore(paths.root / "tool-results")
     cache = ReadCache()
 
-    async with open_yasa_mcp(context.settings, repository) as session:
+    async with use_yasa_mcp(context, repository, fallback_opener=open_yasa_mcp) as session:
         execution = ReconExecution(
             repository=repository,
             model=model,

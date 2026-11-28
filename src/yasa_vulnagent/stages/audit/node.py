@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, cast
 
 from langgraph.errors import GraphRecursionError
@@ -15,8 +16,16 @@ from ...storage import utc_now
 from ...workflow.state import RunContext, RunState
 from .budget import AuditBudget
 from .framework import NODE_NAMES
+from .mcp_pool import SharedYasaMcp
 from .schema import AuditState, empty_state
-from .storage import AuditPaths, audit_paths, load_json, persist_audit_state, unique
+from .storage import (
+    AuditPaths,
+    audit_paths,
+    hydrate_audit_state,
+    load_json,
+    persist_audit_state,
+    unique,
+)
 
 
 @trace_node("workflow.audit")
@@ -43,6 +52,14 @@ def run_stage(
         context,
         audit_budget=context.audit_budget or AuditBudget.create(context.settings.audit_timeout),
     )
+    owns_mcp = context.yasa_mcp is None
+    shared_mcp: SharedYasaMcp | None = None
+    if owns_mcp and state.get("repository"):
+        shared_mcp = SharedYasaMcp(
+            context.settings,
+            Path(str(state.get("repository") or "")),
+        )
+        context = replace(context, yasa_mcp=shared_mcp)
     started_at = utc_now()
     paths = audit_paths(state["stages_dir"])
     paths.root.mkdir(parents=True, exist_ok=True)
@@ -79,6 +96,9 @@ def run_stage(
             },
         )
         raise
+    finally:
+        if shared_mcp is not None:
+            shared_mcp.close()
 
     summary = _summary(result, paths)
     usage.write(paths.usage_file, stage_prefix="audit")
@@ -115,7 +135,7 @@ def _load_or_create(run_state: RunState, paths: AuditPaths) -> AuditState:
             # Drop implementation-status fields from older audit states.
             framework.pop("scaffold", None)
             framework.pop("pending_nodes", None)
-            return cast(AuditState, existing)
+            return cast(AuditState, hydrate_audit_state(existing, paths))
     result = empty_state(run_state, paths)
     result["references"] = _references(run_state)
     persist_audit_state(result)
@@ -316,7 +336,7 @@ def _mark_recursion_limit(state: AuditState, paths: AuditPaths) -> AuditState:
     latest = state
     if paths.state_file.is_file():
         try:
-            latest = cast(AuditState, load_json(paths.state_file))
+            latest = cast(AuditState, hydrate_audit_state(load_json(paths.state_file), paths))
         except (OSError, ValueError):
             pass
     latest = {

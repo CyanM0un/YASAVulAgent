@@ -24,6 +24,7 @@ from ...discover.screen.tools import ReadCache, SourceToolbox
 from ..budget import AuditBudget, AuditTaskBudget
 from ..categories import CategoryManifest, load_category_manifest
 from ..framework import MAX_NODE_VISITS
+from ..mcp_pool import use_yasa_mcp
 from ..prepare.inventory import current_revision
 from ..storage import (
     AuditPaths,
@@ -501,7 +502,7 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
     for task in wave_pending:
         queue.put_nowait(task)
 
-    async with open_yasa_mcp(context.settings, repository) as session:
+    async with use_yasa_mcp(context, repository, fallback_opener=open_yasa_mcp) as session:
         async def _worker() -> None:
             while True:
                 try:

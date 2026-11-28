@@ -89,8 +89,55 @@ def write_text(path: Path, value: str) -> None:
     temporary.replace(path)
 
 
+AUDIT_ARTIFACT_KEYS = (
+    "scope",
+    "entries",
+    "patches",
+    "tasks",
+    "category_checks",
+    "mechanism_checks",
+    "traces",
+    "summaries",
+    "findings",
+    "reviews",
+)
+
+
+def compact_audit_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Strip bulky audit.json-owned collections before writing state.json."""
+    compacted = {
+        key: value
+        for key, value in state.items()
+        if key not in AUDIT_ARTIFACT_KEYS
+    }
+    compacted["state_storage"] = "slim"
+    return compacted
+
+
+def hydrate_audit_state(state: Mapping[str, Any], paths: AuditPaths) -> dict[str, Any]:
+    """Hydrate audit.json-owned collections into an in-memory AuditState."""
+    hydrated = dict(state)
+    for key in AUDIT_ARTIFACT_KEYS:
+        if key not in hydrated:
+            hydrated[key] = {} if key == "scope" else []
+    if paths.audit_file.is_file():
+        try:
+            audit = load_json(paths.audit_file)
+        except (OSError, ValueError):
+            audit = {}
+        for key in AUDIT_ARTIFACT_KEYS:
+            if key not in audit:
+                continue
+            value = audit[key]
+            if key == "scope" and isinstance(value, dict):
+                hydrated[key] = value
+            elif key != "scope" and isinstance(value, list):
+                hydrated[key] = value
+    return hydrated
+
+
 def persist_audit_state(state: Mapping[str, Any]) -> None:
-    write_json(Path(str(state["state_file"])), state)
+    write_json(Path(str(state["state_file"])), compact_audit_state(state))
 
 
 def unique(values: list[str]) -> list[str]:

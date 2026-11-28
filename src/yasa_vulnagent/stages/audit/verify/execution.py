@@ -22,6 +22,7 @@ from ...discover.screen.mcp import open_yasa_mcp
 from ...discover.screen.tools import ReadCache, SourceToolbox
 from ..budget import AuditBudget, AuditTaskBudget
 from ..framework import MAX_NODE_VISITS
+from ..mcp_pool import use_yasa_mcp
 from ..prepare.inventory import current_revision
 from ..storage import paths_from_state, write_verify_checkpoint
 from ..trace.result import EvidenceIndex
@@ -309,7 +310,7 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
     for item in wave_items:
         queue.put_nowait(item)
 
-    async with open_yasa_mcp(context.settings, repository) as session:
+    async with use_yasa_mcp(context, repository, fallback_opener=open_yasa_mcp) as session:
         execution.mcp_session = session
 
         async def _worker() -> None:

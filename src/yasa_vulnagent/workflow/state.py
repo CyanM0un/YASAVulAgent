@@ -60,4 +60,5 @@ class RunContext:
     usage: Any | None = None
     trace_runtime: Any | None = None
     audit_budget: Any | None = None
+    yasa_mcp: Any | None = None
     docker: Any | None = None

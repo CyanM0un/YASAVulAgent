@@ -97,6 +97,25 @@ class TraceYasaToolbox(YasaToolbox):
                 self.receipts[-1]["spans"] = spans
         return payload
 
+    async def get_class_by_name(
+        self,
+        name: str = "",
+        class_fqn: str = "",
+        include_methods: bool = False,
+        max_results: int = 20,
+    ) -> dict[str, Any]:
+        payload = await super().get_class_by_name(
+            name=name,
+            class_fqn=class_fqn,
+            include_methods=include_methods,
+            max_results=max_results,
+        )
+        if self.receipts and self.receipts[-1].get("tool") == "get_class_by_name":
+            spans = _extract_code_spans(payload, self.repository)
+            if spans:
+                self.receipts[-1]["spans"] = spans
+        return payload
+
     async def get_file_by_keyword(
         self,
         keyword: str = "",
@@ -193,7 +212,7 @@ class TraceYasaToolbox(YasaToolbox):
 
 
 def _extract_code_spans(payload: Any, repository: Path) -> list[dict[str, Any]]:
-    """Extract normalized source spans from YASA get_function results that include code."""
+    """Extract normalized source spans from YASA function/class results with code."""
     if not isinstance(payload, dict):
         return []
     results = payload.get("results")
@@ -202,9 +221,18 @@ def _extract_code_spans(payload: Any, repository: Path) -> list[dict[str, Any]]:
     repo_root = repository.expanduser().resolve()
     spans: list[dict[str, Any]] = []
     seen: set[tuple[str, int, int]] = set()
-    for item in results:
+
+    def _collect(item: Any, fallback_path: str = "") -> None:
         if not isinstance(item, dict):
-            continue
+            return
+        location = item.get("location") if isinstance(item.get("location"), dict) else {}
+        raw_path = str(
+            item.get("file_path")
+            or location.get("file_path")
+            or item.get("path")
+            or fallback_path
+            or ""
+        ).strip()
         body = (
             item.get("code")
             or item.get("source")
@@ -212,41 +240,35 @@ def _extract_code_spans(payload: Any, repository: Path) -> list[dict[str, Any]]:
             or item.get("body")
             or ""
         )
-        if not isinstance(body, str) or not body.strip():
-            continue
-        location = item.get("location") if isinstance(item.get("location"), dict) else {}
-        raw_path = str(
-            item.get("file_path")
-            or location.get("file_path")
-            or item.get("path")
-            or ""
-        ).strip()
-        if not raw_path:
-            continue
-        normalized = _relative_path(raw_path, repo_root)
-        if not normalized:
-            continue
-        try:
-            start = int(
-                item.get("start_line")
-                or location.get("start_line")
-                or item.get("line")
-                or 0
-            )
-            end = int(
-                item.get("end_line")
-                or location.get("end_line")
-                or start
-            )
-        except (TypeError, ValueError):
-            continue
-        if start <= 0 or end < start:
-            continue
-        key = (normalized, start, end)
-        if key in seen:
-            continue
-        seen.add(key)
-        spans.append({"path": normalized, "start_line": start, "end_line": end})
+        if isinstance(body, str) and body.strip() and raw_path:
+            normalized = _relative_path(raw_path, repo_root)
+            if normalized:
+                try:
+                    start = int(
+                        item.get("start_line")
+                        or location.get("start_line")
+                        or item.get("line")
+                        or 0
+                    )
+                    end = int(
+                        item.get("end_line")
+                        or location.get("end_line")
+                        or start
+                    )
+                except (TypeError, ValueError):
+                    start, end = 0, 0
+                if start > 0 and end >= start:
+                    key = (normalized, start, end)
+                    if key not in seen:
+                        seen.add(key)
+                        spans.append({"path": normalized, "start_line": start, "end_line": end})
+        methods = item.get("methods")
+        if isinstance(methods, list):
+            for method in methods:
+                _collect(method, fallback_path=raw_path)
+
+    for item in results:
+        _collect(item)
     return spans
 
 
