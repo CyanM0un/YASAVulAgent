@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -304,41 +305,53 @@ async def run_verify_stage(state: Mapping[str, Any], context: RunContext) -> dic
         ),
     )
     deferred = 0
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    for item in wave_items:
+        queue.put_nowait(item)
+
     async with open_yasa_mcp(context.settings, repository) as session:
         execution.mcp_session = session
-        for batch in _batches(wave_items, max(1, int(context.settings.audit_max_agents))):
-            if budget.expired():
-                deferred += len(batch)
-                continue
-            runs = [
-                _run_one(item, execution)
-                if str(item.get("verdict", "")) == "candidate"
-                else _review_only(item, execution)
-                for item in batch
-            ]
-            results = await asyncio.gather(*runs, return_exceptions=True)
-            for item, outcome in zip(batch, results):
-                if isinstance(outcome, Exception):
+
+        async def _worker() -> None:
+            nonlocal deferred
+            while True:
+                try:
+                    item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                if budget.expired():
                     deferred += 1
-                    gaps.append(f"{item.get('id', '')}: {outcome}")
                     continue
-                updated, review, outcome_gaps = outcome
-                gaps.extend(outcome_gaps)
-                if updated is not None:
-                    findings[str(updated["id"])] = updated
-                if review is not None:
-                    reviews[str(review["id"])] = review
-            _write_checkpoint(
-                state,
-                findings=findings,
-                reviews=reviews,
-                inputs=inputs,
-                gaps=gaps,
-                status="partial",
-                stop_reason="verify_partial",
-                model={"status": model_status, "model": model_label},
-                deferred=deferred,
-            )
+                try:
+                    outcome = (
+                        await _run_one(item, execution)
+                        if str(item.get("verdict", "")) == "candidate"
+                        else await _review_only(item, execution)
+                    )
+                except Exception as exc:
+                    deferred += 1
+                    gaps.append(f"{item.get('id', '')}: {exc}")
+                else:
+                    updated, review, outcome_gaps = outcome
+                    gaps.extend(outcome_gaps)
+                    if updated is not None:
+                        findings[str(updated["id"])] = updated
+                    if review is not None:
+                        reviews[str(review["id"])] = review
+                _write_checkpoint(
+                    state,
+                    findings=findings,
+                    reviews=reviews,
+                    inputs=inputs,
+                    gaps=gaps,
+                    status="partial",
+                    stop_reason="verify_partial",
+                    model={"status": model_status, "model": model_label},
+                    deferred=deferred,
+                )
+
+        worker_count = min(max(1, int(context.settings.audit_max_agents)), max(1, len(wave_items)))
+        await asyncio.gather(*(_worker() for _ in range(worker_count)))
 
     pending = [item for item in findings.values() if item.get("verdict") == "candidate"]
     review_pending = [
@@ -437,10 +450,16 @@ async def _review_only(
 
 def _candidate_execution(execution: VerifyExecution) -> VerifyExecution:
     """Verification, review, and adjudication share one per-candidate budget."""
+    task_timeout = int(getattr(execution.settings, "audit_verify_task_timeout", 0) or 0)
+    deadline = (
+        min(execution.task_budget.deadline, time.monotonic() + task_timeout)
+        if task_timeout > 0
+        else execution.task_budget.deadline
+    )
     return replace(
         execution,
         task_budget=AuditTaskBudget(
-            deadline=execution.task_budget.deadline,
+            deadline=deadline,
             max_model_calls=max(1, int(execution.settings.agent_hard_task_cap)),
         ),
     )

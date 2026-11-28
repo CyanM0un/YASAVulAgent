@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ....agent.retry import RetryPolicy
@@ -57,21 +58,36 @@ def plan(state: dict[str, Any], runtime: Any = None) -> dict[str, object]:
         model_name = str(
             getattr(model, "model_name", "") or getattr(model, "model", "") or ""
         )
-        for batch in batches:
+        retry_policy = RetryPolicy(attempts=context.settings.agent_model_retries)
+
+        def _execute(batch: dict[str, Any]) -> dict[str, Any]:
             batch_views = [view_by_id[str(task["id"])] for task in batch["tasks"]]
-            outputs.append(
-                run_batch(
-                    model,
-                    batch,
-                    batch_views,
-                    context.usage,
-                    model_name=model_name,
-                    retry=RetryPolicy(attempts=context.settings.agent_model_retries),
-                )
+            return run_batch(
+                model,
+                batch,
+                batch_views,
+                context.usage,
+                model_name=model_name,
+                retry=retry_policy,
             )
 
+        max_workers = min(
+            len(batches),
+            max(1, int(getattr(context.settings, "audit_model_concurrency", 1) or 1)),
+        )
+        if max_workers > 1:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                outputs = list(executor.map(_execute, batches))
+        else:
+            outputs = [_execute(batch) for batch in batches]
+
     tasks, category_checks, mechanism_checks = derive_final_tasks(
-        seed_tasks, batches, outputs, manifest
+        seed_tasks,
+        batches,
+        outputs,
+        manifest,
+        entries=entries,
+        patches=patches,
     )
     validate_final_tasks(
         seed_tasks,

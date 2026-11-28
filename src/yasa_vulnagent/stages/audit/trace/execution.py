@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -490,92 +491,108 @@ async def run_trace_stage(state: Mapping[str, Any], context: RunContext) -> dict
     )
     verify_reserve = int(getattr(context.settings, "audit_verify_reserve", 0) or 0)
     trace_deadline = audit_budget.trace_deadline(verify_reserve)
+    task_timeout = int(getattr(context.settings, "audit_trace_task_timeout", 0) or 0)
     wave_size = int(getattr(context.settings, "audit_trace_wave_size", 0) or 0)
     trace_visits = int(((state.get("framework") or {}).get("visits") or {}).get("trace", 0) or 0)
     wave_limited = wave_size > 0 and trace_visits < MAX_NODE_VISITS - 2 and len(pending) > wave_size
     wave_pending = pending[:wave_size] if wave_limited else pending
+    live_summary_index = SummaryIndex(summaries)
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    for task in wave_pending:
+        queue.put_nowait(task)
+
     async with open_yasa_mcp(context.settings, repository) as session:
-        for batch in _batches(wave_pending, max(1, int(context.settings.audit_max_agents))):
-            if audit_budget.trace_expired(verify_reserve):
-                for task in batch:
+        async def _worker() -> None:
+            while True:
+                try:
+                    task = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                if audit_budget.trace_expired(verify_reserve):
                     deferred.append(str(task.get("id", "")))
                     _set_task_status(all_tasks, str(task.get("id", "")), "deferred")
-                continue
-            batch_index = SummaryIndex(summaries)
-            batch_state = {
-                **audit,
-                "tasks": all_tasks,
-                "category_checks": category_checks,
-                "mechanism_checks": mechanism_checks,
-            }
-            runs = []
-            for task in batch:
+                    continue
+                per_task_deadline = (
+                    min(trace_deadline, time.monotonic() + task_timeout)
+                    if task_timeout > 0
+                    else trace_deadline
+                )
                 budget = TraceTaskBudget(
-                    deadline=trace_deadline,
+                    deadline=per_task_deadline,
                     max_model_calls=max(1, int(context.settings.agent_hard_task_cap)),
                 )
-                runs.append(
-                    _run_one(task, {
-                        "repository": repository,
-                        "audit_dir": paths.root,
-                        "model": model,
-                        "settings": context.settings,
-                        "registry": registry,
-                        "manifest": manifest,
-                        "category_details": details,
-                        "scope_files": scope_files,
-                        "revision": revision,
-                        "run_id": run_id,
-                        "audit_state": batch_state,
-                        "entries_by_id": entries_by_id,
-                        "patches_by_id": patches_by_id,
-                        "evidence": evidence,
-                        "summary_index": batch_index,
-                        "audit_budget": audit_budget,
-                        "task_budget": budget,
-                        "usage": context.usage,
-                        "store": store,
-                        "mcp_session": session,
-                        "cache": cache,
-                        "business": business,
-                        "paths": paths,
-                        "model_semaphore": model_semaphore,
-                        "repair_by_task": repair_by_task,
-                        "rejections": rejections,
-                    })
-                )
-            results = await asyncio.gather(*runs, return_exceptions=True)
-            for task, outcome in zip(batch, results):
-                if isinstance(outcome, Exception):
+                task_state = {
+                    **audit,
+                    "tasks": list(all_tasks),
+                    "category_checks": list(category_checks),
+                    "mechanism_checks": list(mechanism_checks),
+                }
+                try:
+                    outcome = await _run_one(
+                        task,
+                        {
+                            "repository": repository,
+                            "audit_dir": paths.root,
+                            "model": model,
+                            "settings": context.settings,
+                            "registry": registry,
+                            "manifest": manifest,
+                            "category_details": details,
+                            "scope_files": scope_files,
+                            "revision": revision,
+                            "run_id": run_id,
+                            "audit_state": task_state,
+                            "entries_by_id": entries_by_id,
+                            "patches_by_id": patches_by_id,
+                            "evidence": evidence,
+                            "summary_index": live_summary_index,
+                            "audit_budget": audit_budget,
+                            "task_budget": budget,
+                            "usage": context.usage,
+                            "store": store,
+                            "mcp_session": session,
+                            "cache": cache,
+                            "business": business,
+                            "paths": paths,
+                            "model_semaphore": model_semaphore,
+                            "repair_by_task": repair_by_task,
+                            "rejections": rejections,
+                        },
+                    )
+                except Exception as exc:
                     deferred.append(str(task.get("id", "")))
                     _set_task_status(all_tasks, str(task.get("id", "")), "deferred")
-                    trace_gaps.append(f"{task.get('id', '')}: {outcome}")
-                    continue
-                _merge_outcome(
-                    all_tasks,
-                    category_checks,
-                    mechanism_checks,
-                    traces,
-                    summaries,
-                    task,
-                    outcome,
-                )
-                if str(outcome.get("status")) != "complete":
-                    trace_gaps.extend(str(item) for item in outcome.get("gaps", []))
-            merged = {
-                **dict(state),
-                "tasks": all_tasks,
-                "category_checks": category_checks,
-                "mechanism_checks": mechanism_checks,
-                "traces": traces,
-                "summaries": summaries,
-                "trace": _stage_summary(all_tasks, traces, deferred, trace_gaps),
-                "framework": {
-                    **dict(state.get("framework") or {}),
-                    "trace_done": True,
-                },
-            }
-            write_trace_checkpoint(merged)
+                    trace_gaps.append(f"{task.get('id', '')}: {exc}")
+                else:
+                    _merge_outcome(
+                        all_tasks,
+                        category_checks,
+                        mechanism_checks,
+                        traces,
+                        summaries,
+                        task,
+                        outcome,
+                    )
+                    live_summary_index.add_many(outcome.get("summaries", []))
+                    if str(outcome.get("status")) != "complete":
+                        trace_gaps.extend(str(item) for item in outcome.get("gaps", []))
+                merged = {
+                    **dict(state),
+                    "tasks": all_tasks,
+                    "category_checks": category_checks,
+                    "mechanism_checks": mechanism_checks,
+                    "traces": traces,
+                    "summaries": summaries,
+                    "trace": _stage_summary(all_tasks, traces, deferred, trace_gaps),
+                    "framework": {
+                        **dict(state.get("framework") or {}),
+                        "trace_done": True,
+                    },
+                }
+                write_trace_checkpoint(merged)
+
+        worker_count = min(max(1, int(context.settings.audit_max_agents)), max(1, len(wave_pending)))
+        await asyncio.gather(*(_worker() for _ in range(worker_count)))
 
     has_remaining_pending = any(
         str(item.get("status", "planned")) in {"planned", "deferred", "partial", "failed"}

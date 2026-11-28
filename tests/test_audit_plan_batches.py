@@ -41,7 +41,7 @@ class AuditPlanBatchesTest(unittest.TestCase):
         self.assertTrue(all(len(batch["tasks"]) <= 2 for batch in batches))
         self.assertEqual([batch["key"] for batch in batches], ["<no-path>", "src/a.py", "src/b.py"])
 
-    def test_paths_are_not_mixed_within_a_batch(self) -> None:
+    def test_same_directory_files_are_packed_within_batch_size(self) -> None:
         tasks = [
             _task("entry-1", paths=["src/a.py", "src/b.py"]),
             _task("entry-2", paths=["src/a.py"]),
@@ -49,11 +49,27 @@ class AuditPlanBatchesTest(unittest.TestCase):
         ]
         batches = build_seed_batches(tasks, 10)
 
-        self.assertEqual([batch["key"] for batch in batches], ["src/a.py", "src/b.py"])
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0]["key"], "src")
         self.assertEqual(
             [task["id"] for task in batches[0]["tasks"]],
-            ["entry-1", "entry-2"],
+            ["entry-1", "entry-2", "entry-3"],
         )
+
+    def test_sibling_directories_under_same_module_pack_and_split_at_batch_size(self) -> None:
+        tasks = [
+            _task("entry-1", paths=["pkg/auth/a.py"]),
+            _task("entry-2", paths=["pkg/auth/a.py"]),
+            _task("entry-3", paths=["pkg/upload/b.py"]),
+            _task("entry-4", paths=["other/c.py"]),
+        ]
+        batches = build_seed_batches(tasks, 3)
+
+        self.assertEqual(len(batches), 2)
+        self.assertEqual(batches[0]["key"], "other/c.py")
+        self.assertEqual([t["id"] for t in batches[0]["tasks"]], ["entry-4"])
+        self.assertEqual(batches[1]["key"], "pkg")
+        self.assertEqual([t["id"] for t in batches[1]["tasks"]], ["entry-1", "entry-2", "entry-3"])
 
     def test_entry_and_patch_batches_are_separate(self) -> None:
         tasks = [

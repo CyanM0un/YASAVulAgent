@@ -300,7 +300,7 @@ def _prompt(
         "required_mechanisms": execution.mechanism_checks_for(task),
         "category_catalog": category_catalog,
         "category_details": category_details,
-        "known_summaries": execution.summary_index.all()[:20],
+        "known_summaries": execution.summary_index.for_task(task, scout, limit=8),
         "repair": execution.repair_for(task),
         "known_rejections": execution.rejections.for_task(
             task,

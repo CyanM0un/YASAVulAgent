@@ -33,7 +33,7 @@ async def triage_task(
             "dynamic_suspected": bool(scout.get("dynamic_suspected")),
             "yasa": scout.get("yasa", {}),
         },
-        "known_summaries": execution.summary_index.all()[:20],
+        "known_summaries": execution.summary_index.for_task(task, scout, limit=8),
         "repair": execution.repair_for(task),
         "known_rejections": execution.rejections.for_task(
             task,

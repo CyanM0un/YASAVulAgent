@@ -120,14 +120,58 @@ def build_seed_views(
     return views
 
 
+_UNAUTH_RE = re.compile(
+    r"\b(unauthenticated|anonymous|public|webhook|callback|guest|permitall|allowany|no[-_ ]?auth)\b",
+    re.IGNORECASE,
+)
+_FILE_SURFACE_RE = re.compile(
+    r"\b(upload|file|archive|zip|tar|path|download|attachment|import|export|backup|media|storage)\b",
+    re.IGNORECASE,
+)
+_NETWORK_SURFACE_RE = re.compile(
+    r"\b(url|fetch|ssrf|proxy|redirect|http|webhook|remote|feed|crawl|scrape|dns|socket|cors|csrf)\b",
+    re.IGNORECASE,
+)
+_INJECTION_SURFACE_RE = re.compile(
+    r"\b(sql|query|selector|template|eval|exec|command|shell|script|graphql|xpath|ldap|filter|sort|order)\b",
+    re.IGNORECASE,
+)
+_PARSE_SURFACE_RE = re.compile(
+    r"\b(xml|yaml|deserializ|pickle|parse|parser|decode|unmarshal|json|opml|rss|atom|html|markdown|svg)\b",
+    re.IGNORECASE,
+)
+_AUTH_SURFACE_RE = re.compile(
+    r"\b(auth|login|logout|oauth|oidc|sso|jwt|session|token|password|reset|invite|role|rbac|permission|admin|tenant|api[-_]?key|secret)\b",
+    re.IGNORECASE,
+)
+_MUTATE_VERB_RE = re.compile(r"\b(post|put|delete|patch|create|update|remove|modify|write)\b", re.IGNORECASE)
+_LOW_SIGNAL_RE = re.compile(
+    r"\b(health|healthz|ping|metrics|favicon|robots\.txt|static|assets|version|status|docs|swagger)\b",
+    re.IGNORECASE,
+)
+
+
 def derive_final_tasks(
     seed_tasks: list[dict[str, Any]],
     batches: list[dict[str, Any]],
     outputs: list[dict[str, Any]],
     manifest: CategoryManifest,
+    *,
+    entries: list[dict[str, Any]] | None = None,
+    patches: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Derive final tasks and coverage obligations from validated model output."""
     seed_by_id = {str(task["id"]): task for task in seed_tasks}
+    entries_by_id = {
+        str(item.get("id", "")): item
+        for item in (entries or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    patches_by_id = {
+        str(item.get("id", "")): item
+        for item in (patches or [])
+        if isinstance(item, dict) and item.get("id")
+    }
     records: list[tuple[dict[str, Any], int, int]] = []
 
     for batch_index, (batch, output) in enumerate(zip(batches, outputs, strict=True)):
@@ -157,23 +201,122 @@ def derive_final_tasks(
                 "paths": _union("paths", seed_items),
                 "priority": str(group["priority"]),
             }
+            task["risk_score"] = _task_risk_score(task, entries_by_id, patches_by_id)
             records.append((task, batch_index, local_order))
 
-    records.sort(
-        key=lambda record: (
-            _PRIORITY_RANK[str(record[0]["priority"])],
-            record[1],
-            record[2],
-        )
-    )
+    ordered_records = _order_records(records)
     tasks: list[dict[str, Any]] = []
     category_checks: list[dict[str, Any]] = []
     mechanism_checks: list[dict[str, Any]] = []
-    for task, _, _ in records:
+    for task, _, _ in ordered_records:
         tasks.append(task)
         category_checks.extend(_category_checks(task, manifest))
         mechanism_checks.extend(_mechanism_checks(task, manifest))
     return tasks, category_checks, mechanism_checks
+
+
+def _task_risk_score(
+    task: Mapping[str, Any],
+    entries_by_id: Mapping[str, Mapping[str, Any]],
+    patches_by_id: Mapping[str, Mapping[str, Any]],
+) -> int:
+    score = 0
+    kind = str(task.get("kind", "entry"))
+    if kind == "patch":
+        score += 15
+        if task.get("repair_unit_refs"):
+            score += 5
+        for patch_id in task.get("patch_ids") or []:
+            patch = patches_by_id.get(str(patch_id))
+            if patch and patch.get("usable"):
+                score += 5
+        return score
+
+    parts: list[str] = [str(path) for path in (task.get("paths") or []) if path]
+    entry_ids = [str(eid) for eid in (task.get("entry_ids") or []) if eid]
+    for entry_id in entry_ids:
+        entry = entries_by_id.get(entry_id)
+        if not entry:
+            continue
+        parts.append(str(entry.get("name", "")))
+        discovery = entry.get("discovery") if isinstance(entry.get("discovery"), Mapping) else {}
+        parts.append(str(discovery.get("role", "")))
+        parts.append(str(discovery.get("summary", "")))
+        for field in _FIVE_FIELDS:
+            val = discovery.get(field)
+            if isinstance(val, Mapping):
+                parts.append(str(val.get("summary", "")))
+    text = " ".join(parts)
+    if _UNAUTH_RE.search(text):
+        score += 12
+    if _FILE_SURFACE_RE.search(text):
+        score += 10
+    if _NETWORK_SURFACE_RE.search(text):
+        score += 10
+    if _INJECTION_SURFACE_RE.search(text):
+        score += 10
+    if _PARSE_SURFACE_RE.search(text):
+        score += 8
+    if _AUTH_SURFACE_RE.search(text):
+        score += 8
+    if _MUTATE_VERB_RE.search(text):
+        score += 5
+    if len(entry_ids) > 1:
+        score += min(len(entry_ids) - 1, 3) * 2
+    if _LOW_SIGNAL_RE.search(text) and score < 15:
+        score -= 10
+    return score
+
+
+def _order_records(
+    records: list[tuple[dict[str, Any], int, int]],
+) -> list[tuple[dict[str, Any], int, int]]:
+    """Order by priority tier, then round-robin interleave modules by risk score."""
+    by_priority: dict[int, list[tuple[dict[str, Any], int, int]]] = {}
+    for record in records:
+        rank = _PRIORITY_RANK.get(str(record[0].get("priority", "normal")), 1)
+        by_priority.setdefault(rank, []).append(record)
+
+    ordered: list[tuple[dict[str, Any], int, int]] = []
+    for rank in sorted(by_priority):
+        tier = by_priority[rank]
+        active = [rec for rec in tier if int(rec[0].get("risk_score", 0)) >= 0]
+        demoted = [rec for rec in tier if int(rec[0].get("risk_score", 0)) < 0]
+        for group_slice in (active, demoted):
+            if not group_slice:
+                continue
+            buckets: dict[str, list[tuple[dict[str, Any], int, int]]] = {}
+            for record in group_slice:
+                paths = record[0].get("paths") or []
+                module_key = str(paths[0]) if paths else "<no-path>"
+                buckets.setdefault(module_key, []).append(record)
+            for items in buckets.values():
+                items.sort(
+                    key=lambda rec: (
+                        -int(rec[0].get("risk_score", 0)),
+                        rec[1],
+                        rec[2],
+                    )
+                )
+            bucket_order = sorted(
+                buckets,
+                key=lambda key: (
+                    -int(buckets[key][0][0].get("risk_score", 0)),
+                    buckets[key][0][1],
+                    buckets[key][0][2],
+                ),
+            )
+            indices = {key: 0 for key in bucket_order}
+            remaining = len(group_slice)
+            while remaining > 0:
+                for key in bucket_order:
+                    idx = indices[key]
+                    items = buckets[key]
+                    if idx < len(items):
+                        ordered.append(items[idx])
+                        indices[key] = idx + 1
+                        remaining -= 1
+    return ordered
 
 
 def validate_final_tasks(

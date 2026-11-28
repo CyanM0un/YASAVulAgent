@@ -114,7 +114,7 @@ async def _run_one(
             "chains": scout.get("chains", [])[:4],
             "excerpts": scout.get("excerpts", [])[:8],
         },
-        "known_summaries": execution.summary_index.all()[:10],
+        "known_summaries": execution.summary_index.for_task(task, scout, limit=6),
     }
     try:
         payload = await execution.run_json_agent(

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from ....storage import utc_now
 from ..prepare.inventory import safe_relative
@@ -20,6 +21,7 @@ class SummaryIndex:
     """Valid summaries from the current audit run, keyed by stable id."""
 
     def __init__(self, summaries: list[dict[str, Any]]) -> None:
+        self._lock = threading.Lock()
         self._items = {
             str(item["id"]): dict(item)
             for item in summaries
@@ -27,18 +29,100 @@ class SummaryIndex:
         }
 
     def get(self, summary_id: str) -> dict[str, Any] | None:
-        return self._items.get(str(summary_id))
+        with self._lock:
+            item = self._items.get(str(summary_id))
+            return dict(item) if item is not None else None
 
     def all(self) -> list[dict[str, Any]]:
-        return [dict(item) for item in self._items.values()]
+        with self._lock:
+            return [dict(item) for item in self._items.values()]
 
     def ids(self) -> set[str]:
-        return set(self._items)
+        with self._lock:
+            return set(self._items)
 
-    def add(self, summary: dict[str, Any]) -> None:
+    def add(self, summary: Mapping[str, Any]) -> None:
         summary_id = str(summary.get("id", "")).strip()
-        if summary_id:
+        if not summary_id:
+            return
+        with self._lock:
             self._items[summary_id] = dict(summary)
+
+    def add_many(self, summaries: Iterable[Any]) -> None:
+        with self._lock:
+            for item in summaries:
+                if isinstance(item, Mapping):
+                    summary_id = str(item.get("id", "")).strip()
+                    if summary_id:
+                        self._items[summary_id] = dict(item)
+
+    def for_task(
+        self,
+        task: Mapping[str, Any],
+        scout: Mapping[str, Any] | None = None,
+        *,
+        limit: int = 8,
+        compact: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Return only summaries relevant to this task's call chains or paths."""
+        task_paths = {str(path).strip() for path in (task.get("paths") or []) if str(path).strip()}
+        chain_paths: set[str] = set()
+        chain_fqns: set[str] = set()
+        chain_short_names: set[str] = set()
+        if isinstance(scout, Mapping):
+            for chain in scout.get("chains") or []:
+                if not isinstance(chain, Mapping):
+                    continue
+                for node in chain.get("nodes") or []:
+                    if not isinstance(node, Mapping):
+                        continue
+                    node_path = str(node.get("path", "")).strip()
+                    if node_path:
+                        chain_paths.add(node_path)
+                    fqn = str(node.get("function_fqn", "")).strip()
+                    if fqn:
+                        chain_fqns.add(fqn)
+                        short = fqn.rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+                        if short:
+                            chain_short_names.add(short)
+        all_paths = task_paths | chain_paths
+        parent_dirs = {
+            str(Path(path).parent).replace("\\", "/")
+            for path in all_paths
+            if str(Path(path).parent) not in {"", "."}
+        }
+        if not (all_paths or chain_fqns):
+            return []
+
+        with self._lock:
+            snapshot = list(self._items.values())
+
+        scored: list[tuple[int, str, dict[str, Any]]] = []
+        for item in snapshot:
+            unit = item.get("unit") if isinstance(item.get("unit"), Mapping) else {}
+            unit_path = str(unit.get("path", "")).strip()
+            unit_fqn = str(unit.get("function_fqn", "")).strip()
+            unit_short = unit_fqn.rsplit(".", 1)[-1].rsplit("/", 1)[-1] if unit_fqn else ""
+            score = 0
+            if unit_fqn and (
+                unit_fqn in chain_fqns
+                or (unit_short and unit_short in chain_short_names and unit_path in all_paths)
+            ):
+                score += 4
+            if unit_path and unit_path in chain_paths:
+                score += 3
+            if unit_path and unit_path in task_paths:
+                score += 2
+            if unit_path:
+                unit_dir = str(Path(unit_path).parent).replace("\\", "/")
+                if unit_dir in parent_dirs:
+                    score += 1
+            if score > 0:
+                scored.append((score, str(item.get("id", "")), item))
+
+        scored.sort(key=lambda entry: (-entry[0], entry[1]))
+        selected = [entry[2] for entry in scored[: max(1, int(limit))]]
+        return [_compact_summary(item) if compact else dict(item) for item in selected]
 
 
 def build_index(
@@ -100,6 +184,9 @@ def validate_candidates(
         if not evidence:
             gaps.append(f"{label}: summary requires current-source evidence")
             continue
+        if len(summaries) >= SUMMARY_MAX_PER_TASK:
+            gaps.append(f"summary candidates truncated at {SUMMARY_MAX_PER_TASK}")
+            break
         content_hash = _file_hash(Path(repository) / path)
         summary_id = _summary_id(run_id, revision, path, function_fqn, content_hash)
         summaries.append(
@@ -131,9 +218,6 @@ def validate_candidates(
                 "reuse_count": 0,
             }
         )
-        if len(summaries) >= SUMMARY_MAX_PER_TASK:
-            gaps.append(f"summary candidates truncated at {SUMMARY_MAX_PER_TASK}")
-            break
     return _dedupe(summaries), gaps
 
 
@@ -236,3 +320,37 @@ def _strings(value: Any) -> list[str]:
 
 def _objects(value: Any) -> list[dict[str, Any]]:
     return [dict(item) for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _compact_summary(item: Mapping[str, Any]) -> dict[str, Any]:
+    unit = item.get("unit") if isinstance(item.get("unit"), Mapping) else {}
+    anchors: list[str] = []
+    for ev in item.get("evidence") or []:
+        if not isinstance(ev, Mapping):
+            continue
+        path = str(ev.get("path", "")).strip()
+        if not path:
+            continue
+        start = ev.get("start_line")
+        end = ev.get("end_line")
+        anchor = f"{path}:{start}-{end}" if start and end else path
+        if anchor not in anchors:
+            anchors.append(anchor)
+        if len(anchors) >= 4:
+            break
+    return {
+        "id": str(item.get("id", "")),
+        "task_id": str(item.get("task_id", "")),
+        "unit": {
+            "kind": str(unit.get("kind", "helper")),
+            "path": str(unit.get("path", "")),
+            "function_fqn": str(unit.get("function_fqn", "")),
+            "start_line": int(unit.get("start_line", 0) or 0),
+            "end_line": int(unit.get("end_line", 0) or 0),
+        },
+        "behavior": str(item.get("behavior", ""))[:400],
+        "conditions": [str(c)[:160] for c in (item.get("conditions") or [])[:6] if c],
+        "guards": [str(g)[:160] for g in (item.get("guards") or [])[:6] if g],
+        "unknowns": [str(u)[:160] for u in (item.get("unknowns") or [])[:4] if u],
+        "evidence_anchors": anchors,
+    }
